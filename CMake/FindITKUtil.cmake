@@ -55,6 +55,7 @@ macro(FindITKUtil ITK_VAR_PREFIX )
     ITKIOTransformMatlab
     ITKIOTransformHDF5
     ITKIOGE
+    ITKIOMRC
     ${BRAINSTOOLS_MGHIO_MODULE_NAME}
     # other modules specific to the current directory
     ${ARGN}
