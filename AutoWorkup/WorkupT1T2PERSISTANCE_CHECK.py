@@ -1,19 +1,20 @@
 #!/usr/bin/env python
 
+from __future__ import print_function
 from nipype.interfaces.base import CommandLine, CommandLineInputSpec, TraitedSpec, File, Directory
 from nipype.interfaces.base import traits, isdefined, BaseInterface
 from nipype.interfaces.utility import Merge, Split, Function, Rename, IdentityInterface
 import nipype.interfaces.io as nio   # Data i/o
 import nipype.pipeline.engine as pe  # pypeline engine
 
-from SEMTools import *
+from nipype.interfaces.semtools import *
 
 """
     from WorkupT1T2PERSISTANCE_CHECK import CreatePERSISTANCE_CHECKWorkflow
     myLocalPERSISTANCE_CHECKWF= CreatePERSISTANCE_CHECKWorkflow("999999_PersistanceCheckingWorkflow")
     PERSISTANCE_CHECKWF.connect(SplitAvgBABC,'avgBABCT1',myLocalPERSISTANCE_CHECKWF,'fixedVolume')
     PERSISTANCE_CHECKWF.connect(BABC,'outputLabels',myLocalPERSISTANCE_CHECKWF,'fixedBinaryVolume')
-    PERSISTANCE_CHECKWF.connect(BAtlas,'template_t1',myLocalPERSISTANCE_CHECKWF,'movingVolume')
+    PERSISTANCE_CHECKWF.connect(BAtlas,'template_t1_denoised_gaussian',myLocalPERSISTANCE_CHECKWF,'movingVolume')
     PERSISTANCE_CHECKWF.connect(BAtlas,'template_brain',myLocalPERSISTANCE_CHECKWF,'movingBinaryVolume')
     PERSISTANCE_CHECKWF.connect(BLI,'outputTransformFilename',myLocalPERSISTANCE_CHECKWF,'initialTransform')
 """

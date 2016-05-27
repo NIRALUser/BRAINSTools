@@ -82,7 +82,7 @@ DtiStreamlineTrackingFilter<TTensorImageType, TAnisotropyImageType, TMaskImageTy
   bool addFiber;
 
   const double inRadians = this->pi / 180.0;
-  double       curvatureThreshold = vcl_cos( this->m_CurvatureThreshold * inRadians );
+  double       curvatureThreshold = std::cos( this->m_CurvatureThreshold * inRadians );
 
   this->m_Output = vtkPolyData::New();
   this->m_TrackingDirections.clear();
@@ -177,7 +177,7 @@ DtiStreamlineTrackingFilter<TTensorImageType, TAnisotropyImageType, TMaskImageTy
         typename Self::TensorImagePixelType tensorPixel = this->m_VectorIP->EvaluateAtContinuousIndex(index);
 
         TMatrix fullTensorPixel(3, 3); fullTensorPixel = Tensor2Matrix( tensorPixel );
-        fiberTensors->InsertNextTupleValue( fullTensorPixel.data_block() );
+        fiberTensors->InsertNextTypedTuple( fullTensorPixel.data_block() );
 
         tensorPixel.ComputeEigenAnalysis(eigenValues, eigenVectors);
 

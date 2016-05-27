@@ -288,6 +288,8 @@ int main(int argc, char *argv[])
     }
 
   // Need to ensure that the order of transforms is from smallest to largest.
+  if(localInitializeTransformMode == "Off")
+  {
   try
     {
     itk::ValidateTransformRankOrdering(localTransformType);
@@ -298,6 +300,7 @@ int main(int argc, char *argv[])
     std::cout << err << std::endl;
     throw;
     }
+  }
 
   // Extracting a timeIndex cube from the fixed image goes here....
   // Also MedianFilter
@@ -537,11 +540,16 @@ int main(int argc, char *argv[])
     myHelper->Update();
     currentGenericTransform = myHelper->GetCurrentGenericTransform();
 
-    CompositeTransformType::Pointer outputComposite = dynamic_cast<CompositeTransformType *>( currentGenericTransform.GetPointer() );
-    if( outputComposite.IsNull() )
+    std::string currentGenericTransformFileType;
+    if ( currentGenericTransform.IsNotNull() )
+      {
+      currentGenericTransformFileType = std::string( currentGenericTransform->GetNameOfClass() );
+      }
+    if( currentGenericTransformFileType != "CompositeTransform" )
       {
       itkGenericExceptionMacro(<<"ERROR: Output transform is null.");
       }
+    CompositeTransformType::Pointer outputComposite = static_cast<CompositeTransformType *>( currentGenericTransform.GetPointer() );
 
     MovingVolumeType::ConstPointer preprocessedMovingVolume = myHelper->GetPreprocessedMovingVolume();
     if( NormalizeInputImages )

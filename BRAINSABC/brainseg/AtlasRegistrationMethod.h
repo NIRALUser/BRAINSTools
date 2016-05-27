@@ -52,6 +52,7 @@
 #include "itkBinaryThresholdImageFilter.h"
 #include <string>
 
+#include "LinearRegressionIntensityMatching.h"
 class EmptyVectorException
 {
 public:
@@ -115,9 +116,15 @@ AverageImageList(const std::vector<typename TImage::Pointer> & inputImageList)
 
   typedef itk::AverageImageFilter<TImage,TImage> AvgFilterType;
   typename AvgFilterType::Pointer filter = AvgFilterType::New();
-  for(unsigned int i = 0; i < inputImageList.size(); ++i)
+  typename TImage::Pointer referenceScaleImg = inputImageList[0];
+  filter->SetInput(0,referenceScaleImg);
+  for(unsigned int i = 1; i < inputImageList.size(); ++i)
     {
-    filter->SetInput(i,inputImageList[i]);
+      //Modify inputImageList in place.
+      typename TImage::Pointer temp=LinearRegressionIntensityMatching<TImage,TImage>(referenceScaleImg.GetPointer(),
+                                                          averageMask.GetPointer(),
+                                                          inputImageList[i].GetPointer());
+      filter->SetInput(i,  temp);
     }
   filter->Update();
   typename MultiplyFilterType::Pointer multIF = MultiplyFilterType::New();
@@ -185,13 +192,13 @@ public:
   typedef itk::Array<unsigned char> FlagArrayType;
 
   typedef std::vector<std::string> StringVector;
-  typedef std::map<std::string,StringVector > MapOfStringVectors;
+  typedef orderedmap<std::string,StringVector > MapOfStringVectors;
 
   typedef std::vector<InternalImagePointer> FloatImageVector;
-  typedef std::map<std::string, FloatImageVector> MapOfFloatImageVectors;
+  typedef orderedmap<std::string, FloatImageVector> MapOfFloatImageVectors;
 
   typedef std::vector<GenericTransformType::Pointer> TransformList;
-  typedef std::map<std::string,TransformList>        MapOfTransformLists;
+  typedef orderedmap<std::string,TransformList>        MapOfTransformLists;
 
   void SetSuffix(std::string suffix);
 
@@ -205,9 +212,14 @@ public:
     {
       return GetMapVectorFirstElement(this->m_AtlasOriginalImageList);
     }
-  InternalImagePointer GetSecondModalityAtlasOriginalImage(const std::string type)
+  InternalImagePointer GetSecondModalityAtlasOriginalImage(const std::string & type)
     {
-      return *(this->m_AtlasOriginalImageList.find( type )->second.begin());
+      MapOfFloatImageVectors::iterator test_map_location = this->m_AtlasOriginalImageList.find( type );
+      if( test_map_location == this->m_AtlasOriginalImageList.end() )
+        {
+        return ITK_NULLPTR;
+        }
+      return *(test_map_location->second.begin());
     }
 
   void SetAtlasOriginalImageList(MapOfFloatImageVectors & NewAtlasList);

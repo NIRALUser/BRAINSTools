@@ -11,6 +11,9 @@
 ##
 #################################################################################
 
+from __future__ import print_function
+from __future__ import absolute_import
+from builtins import str
 import os
 #"""Import necessary modules from nipype."""
 # from nipype.utils.config import config
@@ -18,7 +21,7 @@ import os
 # config.set_log_dir(os.getcwd())
 #--config.set('logging', 'workflow_level', 'DEBUG')
 #--config.set('logging', 'interface_level', 'DEBUG')
-#--config.set('execution','remove_unnecessary_outputs','false')
+#--config.set('execution','remove_unnecessary_outputs','true')
 
 import nipype.pipeline.engine as pe
 import nipype.interfaces.io as nio
@@ -37,22 +40,24 @@ from utilities.distributed import modify_qsub_args
 from PipeLineFunctionHelpers import convertToList, FixWMPartitioning, AccumulateLikeTissuePosteriors
 from PipeLineFunctionHelpers import UnwrapPosteriorImagesFromDictionaryFunction as flattenDict
 
-from WorkupT1T2LandmarkInitialization import CreateLandmarkInitializeWorkflow
-from WorkupT1T2TissueClassify import CreateTissueClassifyWorkflow
-from WorkupT1T2MALF import CreateMALFWorkflow
-from WorkupAddsonBrainStem import CreateBrainstemWorkflow
+from .WorkupT1T2LandmarkInitialization import CreateLandmarkInitializeWorkflow
+from .WorkupT1T2TissueClassify import CreateTissueClassifyWorkflow
+from .WorkupJointFusion import CreateJointFusionWorkflow
+from .WorkupAddsonBrainStem import CreateBrainstemWorkflow
 
 from utilities.misc import *
 
 try:
-    from SEMTools import *
+    from nipype.interfaces.semtools import *
 except ImportError:
-    from AutoWorkup.SEMTools import *
+    from AutoWorkup.semtools import *
 
-from SEMTools.registration.brainsresample import BRAINSResample
+from nipype.interfaces.semtools.registration.brainsresample import BRAINSResample
 
-from SEMTools.filtering.denoising import UnbiasedNonLocalMeans
-from SEMTools.segmentation.specialized import BRAINSCreateLabelMapFromProbabilityMaps
+#from nipype.interfaces.semtools.filtering.denoising import UnbiasedNonLocalMeans
+from nipype.interfaces.ants.segmentation import DenoiseImage
+from nipype.interfaces.ants.segmentation import N4BiasFieldCorrection
+from nipype.interfaces.semtools.segmentation.specialized import BRAINSCreateLabelMapFromProbabilityMaps
 
 
 def get_list_element(nestedList, index):
@@ -173,10 +178,120 @@ def CreateLeftRightWMHemispheres(BRAINLABELSFile,
     ## TODO Add splitting into hemispheres code here
     return WM_LeftHemisphereFileName, WM_RightHemisphereFileName
 
+def image_autounwrap(wrapped_inputfn, unwrapped_outputbasefn):
+    """ Find optimal image roll in each direction
+    to roll the image with circular boundaries such
+    that the resulting head is not split across the
+    image boundaries"""
+    import SimpleITK as sitk
+    import numpy as np
+    from scipy.signal import savgol_filter
 
+    def FlipPermuteToIdentity(sitkImageIn):
+        dc=np.array(sitkImageIn.GetDirection())
+        dc =dc.reshape(3,3)
+        permute_values = [7,7,7]
+        for i in range(0,3):
+            permute_values[i] = np.argmax(np.abs(dc[i,:]))
+        permuted_image=sitk.PermuteAxes(sitkImageIn,permute_values)
+
+        dc=np.array(permuted_image.GetDirection())
+        dc =dc.reshape(3,3)
+        flip_values = [False,False,False]
+        for i in range(0,3):
+            if dc[i,i] < 0:
+                flip_values[i] = True
+        flipped_permuted_image = sitk.Flip(permuted_image,flip_values)
+
+        return flipped_permuted_image
+
+    # ensure that normal strings are used here
+    # via typecasting.  ReadImage requires types
+    # to be strings
+    wrapped_inputfn = [ str(ii) for ii in wrapped_inputfn ]
+    unwrapped_outputbasefn = [ str(ii) for ii in unwrapped_outputbasefn ]
+
+    def one_axis_unwrap(wrapped_image, axis):
+        slice_values = list()
+        sitkAxis = wrapped_image.GetDimension() - 1 - axis;
+
+        last_slice=wrapped_image.GetSize()[sitkAxis]
+        mask = 1.0-sitk.OtsuThreshold(wrapped_image)
+        mask = sitk.BinaryClosingByReconstruction(mask,6) ## Fill some small holes
+
+        image_as_np = sitk.GetArrayFromImage(
+            wrapped_image*sitk.Cast(mask,wrapped_image.GetPixelIDValue())
+        )
+        for ii in range(0, last_slice):
+            next_index=(ii+1)%last_slice
+            if axis == 0:
+                curr_slice=image_as_np[ii, :, :].flatten()
+                next_slice=image_as_np[next_index, :, :].flatten()
+            elif axis == 1:
+                curr_slice=image_as_np[:, ii, :].flatten()
+                next_slice=image_as_np[:,next_index, :].flatten()
+            elif axis == 2:
+                curr_slice=image_as_np[:, :,ii].flatten()
+                next_slice=image_as_np[:, :,next_index].flatten()
+            else:
+                curr_slice=0
+                next_slice=0
+                metric_value = 0
+                print("FATAL ERROR")
+            diff=curr_slice-next_slice
+            diff=diff*diff
+            metric_value=np.sum(diff)
+            if ii == 0:
+               ref_slice_limit = 5*metric_value
+            if metric_value > ref_slice_limit:
+                metric_value=ref_slice_limit
+            slice_values.append(metric_value)
+        del image_as_np
+        ## Call smoothing function to remove small noise
+        #return slice_values,slice_values
+        window_length = 3 #2*(208/2)+1
+        polyorder = 1
+        slice_values = savgol_filter(np.array(slice_values),
+                                     window_length, polyorder, deriv=1, mode='wrap')
+
+        min_slice = np.argmax(slice_values)
+
+        axis_max = wrapped_image.GetSize()[sitkAxis] - 1
+        if min_slice > axis_max / 2:
+            zRoll = min_slice - axis_max
+        else:
+            zRoll = min_slice
+        orig_image_as_np = sitk.GetArrayFromImage(wrapped_image)
+        unwrapped_image_as_np = np.roll(orig_image_as_np, zRoll, axis)
+        outim = sitk.GetImageFromArray(unwrapped_image_as_np)
+        outim.CopyInformation(wrapped_image)
+        return outim, zRoll, slice_values
+
+    unwrapped_outputfn = []
+    for index in range(0,len(wrapped_inputfn)):
+        ii = wrapped_inputfn[index]
+        wrapped_image = sitk.ReadImage(str(ii))
+        identdc_wrapped_image=FlipPermuteToIdentity(wrapped_image)
+        del wrapped_image
+        if 0 == 1: # THIS DOES NOT WORK ROBUSTLY YET
+            unwrapped_image, rotationZ, zslicevalues = one_axis_unwrap(identdc_wrapped_image, 0)
+            unwrapped_image, rotationY, yslicevalues = one_axis_unwrap(unwrapped_image, 1)
+            unwrapped_image, rotationX, xslicevalues = one_axis_unwrap(unwrapped_image, 2)
+
+            new_origin = identdc_wrapped_image.TransformContinuousIndexToPhysicalPoint((-rotationX, -rotationY, -rotationZ))
+            del identdc_wrapped_image
+            unwrapped_image.SetOrigin(new_origin)
+        else:
+            unwrapped_image = identdc_wrapped_image
+        import os
+        unwrapped_outputfn1=os.path.realpath(unwrapped_outputbasefn[index])
+        sitk.WriteImage(unwrapped_image,unwrapped_outputfn1)
+        unwrapped_outputfn.append(unwrapped_outputfn1)
+
+    return unwrapped_outputfn
 
 def generate_single_session_template_WF(projectid, subjectid, sessionid, onlyT1, master_config, phase, interpMode,
-                                        pipeline_name, doDenoise=True):
+                                        pipeline_name, doDenoise=True, badT2 = False, useEMSP=False):
     """
     Run autoworkup on a single sessionid
 
@@ -197,16 +312,20 @@ def generate_single_session_template_WF(projectid, subjectid, sessionid, onlyT1,
 
     if 'tissue_classify' in master_config['components']:
         assert ('landmark' in master_config['components'] ), "tissue_classify Requires landmark step!"
-    if 'landmark' in master_config['components']:
-        assert 'denoise' in master_config['components'], "landmark Requires denoise step!"
+    # NOT TRUE if 'landmark' in master_config['components']:
+    #    assert 'denoise' in master_config['components'], "landmark Requires denoise step!"
+
+    if 'jointfusion_2015_wholebrain' in master_config['components']:
+        assert ('warp_atlas_to_subject' in master_config['components'] ), "jointfusion_2015_wholebrain requires warp_atlas_to_subject!"
 
     from workflows.atlasNode import MakeAtlasNode
 
     baw201 = pe.Workflow(name=pipeline_name)
 
     inputsSpec = pe.Node(interface=IdentityInterface(fields=['atlasLandmarkFilename', 'atlasWeightFilename',
-                                                             'LLSModel', 'inputTemplateModel', 'template_t1',
+                                                             'LLSModel', 'inputTemplateModel', 'template_t1_denoised_gaussian',
                                                              'atlasDefinition', 'T1s', 'T2s', 'PDs', 'FLs', 'OTHERs',
+                                                             'EMSP',
                                                              'hncma_atlas',
                                                              'template_rightHemisphere',
                                                              'template_leftHemisphere',
@@ -238,6 +357,7 @@ def generate_single_session_template_WF(projectid, subjectid, sessionid, onlyT1,
 
     atlas_static_directory = master_config['atlascache']
     if master_config['workflow_phase'] == 'atlas-based-reference':
+        PostACPCAlignToAtlas=False
         atlas_warped_directory = master_config['atlascache']
         atlasABCNode_XML = MakeAtlasNode(atlas_warped_directory, 'BABCXMLAtlas_{0}'.format(sessionid),
                                          ['W_BRAINSABCSupport'])
@@ -258,7 +378,7 @@ def generate_single_session_template_WF(projectid, subjectid, sessionid, onlyT1,
         atlasBCDNode_W = MakeAtlasNode(atlas_warped_directory, 'BBCDAtlas_W{0}'.format(sessionid),
                                        ['W_BCDSupport'])
         baw201.connect([(atlasBCDNode_W, inputsSpec,
-                         [('template_t1', 'template_t1'),
+                         [('template_t1_denoised_gaussian', 'template_t1_denoised_gaussian'),
                           ('template_landmarks_50Lmks_fcsv', 'atlasLandmarkFilename'),
                          ]),
         ])
@@ -269,7 +389,8 @@ def generate_single_session_template_WF(projectid, subjectid, sessionid, onlyT1,
 
 
     elif master_config['workflow_phase'] == 'subject-based-reference':
-        print master_config['previousresult']
+        PostACPCAlignToAtlas=True # Use this subjects atlas image to align landmarks
+        print(master_config['previousresult'])
         atlas_warped_directory = os.path.join(master_config['previousresult'], subjectid, 'Atlas')
 
         atlasBCUTNode_W = pe.Node(interface=nio.DataGrabber(infields=['subject'],
@@ -339,7 +460,7 @@ def generate_single_session_template_WF(projectid, subjectid, sessionid, onlyT1,
                                                                    'template_WMPM2_labels',
                                                                    'template_nac_labels',
                                                                    'template_ventricles',
-                                                                   'template_t1',
+                                                                   'template_t1_denoised_gaussian',
                                                                    'template_landmarks_50Lmks_fcsv'
                                                         ]),
                               name='Template_DG')
@@ -352,7 +473,7 @@ def generate_single_session_template_WF(projectid, subjectid, sessionid, onlyT1,
                                              'template_WMPM2_labels': '%s/Atlas/AVG_template_WMPM2_labels.nii.gz',
                                              'template_nac_labels': '%s/Atlas/AVG_template_nac_labels.nii.gz',
                                              'template_ventricles': '%s/Atlas/AVG_template_ventricles.nii.gz',
-                                             'template_t1': '%s/Atlas/AVG_T1.nii.gz',
+                                             'template_t1_denoised_gaussian': '%s/Atlas/AVG_T1.nii.gz',
                                              'template_landmarks_50Lmks_fcsv': '%s/Atlas/AVG_LMKS.fcsv',
         }
         template_DG.inputs.template_args = {'outAtlasXMLFullPath': [['subject', 'subject']],
@@ -362,7 +483,7 @@ def generate_single_session_template_WF(projectid, subjectid, sessionid, onlyT1,
                                             'template_WMPM2_labels': [['subject']],
                                             'template_nac_labels': [['subject']],
                                             'template_ventricles': [['subject']],
-                                            'template_t1': [['subject']],
+                                            'template_t1_denoised_gaussian': [['subject']],
                                             'template_landmarks_50Lmks_fcsv': [['subject']]
         }
         template_DG.inputs.template = '*'
@@ -371,7 +492,7 @@ def generate_single_session_template_WF(projectid, subjectid, sessionid, onlyT1,
 
         baw201.connect(template_DG, 'outAtlasXMLFullPath', inputsSpec, 'atlasDefinition')
         baw201.connect([(template_DG, inputsSpec, [
-            ## Already connected ('template_t1','template_t1'),
+            ## Already connected ('template_t1_denoised_gaussian','template_t1_denoised_gaussian'),
             ('hncma_atlas', 'hncma_atlas'),
             ('template_leftHemisphere', 'template_leftHemisphere'),
             ('template_rightHemisphere', 'template_rightHemisphere'),
@@ -382,7 +503,7 @@ def generate_single_session_template_WF(projectid, subjectid, sessionid, onlyT1,
         )
         ## These landmarks are only relevant for the atlas-based-reference case
         baw201.connect([(template_DG, inputsSpec,
-                         [('template_t1', 'template_t1'),
+                         [('template_t1_denoised_gaussian', 'template_t1_denoised_gaussian'),
                           ('template_landmarks_50Lmks_fcsv', 'atlasLandmarkFilename'),
                          ]),
         ])
@@ -403,36 +524,77 @@ def generate_single_session_template_WF(projectid, subjectid, sessionid, onlyT1,
         print("\ndenoise image filter\n")
         makeDenoiseInImageList = pe.Node(Function(function=MakeOutFileList,
                                                   input_names=['T1List', 'T2List', 'PDList', 'FLList',
-                                                               'OtherList', 'postfix', 'PrimaryT1'],
-                                                  output_names=['inImageList', 'outImageList', 'imageTypeList']),
+                                                               'OTHERList', 'postfix', 'postfixBFC', 'postfixUnwrapped',
+                                                               'PrimaryT1','ListOutType'],
+                                                  output_names=['inImageList', 'outImageList', 'outBFCImageList',
+                                                                'outUnwrappedImageList','imageTypeList']),
                                          run_without_submitting=True, name="99_makeDenoiseInImageList")
         baw201.connect(inputsSpec, 'T1s', makeDenoiseInImageList, 'T1List')
         baw201.connect(inputsSpec, 'T2s', makeDenoiseInImageList, 'T2List')
         baw201.connect(inputsSpec, 'PDs', makeDenoiseInImageList, 'PDList')
-        makeDenoiseInImageList.inputs.FLList = []  # an emptyList HACK
+        baw201.connect(inputsSpec, 'FLs', makeDenoiseInImageList, 'FLList' )
+        baw201.connect(inputsSpec, 'OTHERs', makeDenoiseInImageList, 'OTHERList')
+        makeDenoiseInImageList.inputs.ListOutType= False
+        makeDenoiseInImageList.inputs.postfix = "_ants_denoised.nii.gz"
+        makeDenoiseInImageList.inputs.postfixBFC = "_N4_BFC.nii.gz"
+        makeDenoiseInImageList.inputs.postfixUnwrapped = "_unwrapped.nii.gz"
         makeDenoiseInImageList.inputs.PrimaryT1 = None  # an emptyList HACK
-        makeDenoiseInImageList.inputs.postfix = "_UNM_denoised.nii.gz"
-        # HACK baw201.connect( inputsSpec, 'FLList', makeDenoiseInImageList, 'FLList' )
-        baw201.connect(inputsSpec, 'OTHERs', makeDenoiseInImageList, 'OtherList')
 
-        print("\nDenoise:\n")
-        DenoiseInputImgs = pe.MapNode(interface=UnbiasedNonLocalMeans(),
-                                      name='denoiseInputImgs',
-                                      iterfield=['inputVolume',
-                                                 'outputVolume'])
-        DenoiseInputImgs.inputs.rc = [1, 1, 1]
-        DenoiseInputImgs.inputs.rs = [4, 4, 4]
-        DenoiseInputImgs.plugin_args = {'qsub_args': modify_qsub_args(master_config['queue'], .2, 1, 1),
-                                        'overwrite': True}
-        baw201.connect([(makeDenoiseInImageList, DenoiseInputImgs, [('inImageList', 'inputVolume')]),
-                        (makeDenoiseInImageList, DenoiseInputImgs, [('outImageList', 'outputVolume')])
+        unwrapImage = pe.Node(interface=Function(function=image_autounwrap,
+                                                   input_names=['wrapped_inputfn','unwrapped_outputbasefn'],
+                                                   output_names=['unwrapped_outputfn']
+                                         ),
+                                 name="unwrap_image")
+
+        baw201.connect([(makeDenoiseInImageList, unwrapImage, [('inImageList', 'wrapped_inputfn')]),
+                        (makeDenoiseInImageList, unwrapImage, [('outUnwrappedImageList', 'unwrapped_outputbasefn')])
         ])
+        print("\nDenoise:\n")
+        DenoiseInputImgs = pe.MapNode(interface=DenoiseImage(),
+                                      name='denoiseInputImgs',
+                                      iterfield=['input_image',
+                                                 'output_image'])
+        DenoiseInputImgs.plugin_args = {'qsub_args': modify_qsub_args(master_config['queue'], 2, 4, 8),
+                                        'overwrite': True}
+        DenoiseInputImgs.inputs.num_threads = -1
+        DenoiseInputImgs.synchronize = True
+        DenoiseInputImgs.inputs.dimension = 3
+
+        #Rician has a bug in it as of 2016-02-08 DenoiseInputImgs.inputs.noise_model= 'Rician'
+        #Rician bug fixed by Nick Tustison 2016-02-15
+        DenoiseInputImgs.inputs.noise_model= 'Rician'
+        #DenoiseInputImgs.inputs.save_noise=True # we do need this until NIPYPE is fixed
+        DenoiseInputImgs.inputs.save_noise=False # we don't need the noise image for BAW
+        DenoiseInputImgs.inputs.shrink_factor = 1 # default
+        baw201.connect([(unwrapImage, DenoiseInputImgs, [('unwrapped_outputfn', 'input_image')]),
+                        (makeDenoiseInImageList, DenoiseInputImgs, [('outImageList', 'output_image')])
+        ])
+
+        print("\nN4BiasFieldCorrection:\n")
+        N4BFC = pe.MapNode(interface=N4BiasFieldCorrection(),
+                           name='N4BFC',
+                           iterfield=['input_image',
+                                      'output_image'])
+        N4BFC.plugin_args = {'qsub_args': modify_qsub_args(master_config['queue'], 4, 8, 8),
+                                        'overwrite': True}
+        N4BFC.inputs.num_threads = -1
+        N4BFC.inputs.dimension = 3
+        N4BFC.inputs.bspline_fitting_distance = 200
+        N4BFC.inputs.shrink_factor = 3
+        N4BFC.inputs.n_iterations = [50,50,30,20]
+        N4BFC.inputs.convergence_threshold = 1e-6
+
+        baw201.connect([(DenoiseInputImgs, N4BFC, [('output_image', 'input_image')]),
+                        (makeDenoiseInImageList, N4BFC, [('outBFCImageList', 'output_image')])
+        ])
+
         print("\nMerge all T1 and T2 List\n")
         makePreprocessingOutList = pe.Node(Function(function=GenerateSeparateImageTypeList,
                                                     input_names=['inFileList', 'inTypeList'],
-                                                    output_names=['T1s', 'T2s', 'PDs', 'FLs', 'OtherList']),
-                                           run_without_submitting=True, name="99_makePreprocessingOutList")
-        baw201.connect(DenoiseInputImgs, 'outputVolume', makePreprocessingOutList, 'inFileList')
+                                                    output_names=['T1s', 'T2s', 'PDs', 'FLs', 'OTHERs']),
+                                           run_without_submitting=False,
+                                           name="99_makePreprocessingOutList")
+        baw201.connect(N4BFC, 'output_image', makePreprocessingOutList, 'inFileList')
         baw201.connect(makeDenoiseInImageList, 'imageTypeList', makePreprocessingOutList, 'inTypeList')
 
     else:
@@ -442,7 +604,7 @@ def generate_single_session_template_WF(projectid, subjectid, sessionid, onlyT1,
         DoReverseMapping = False  # Set to true for debugging outputs
         if 'auxlmk' in master_config['components']:
             DoReverseMapping = True
-        myLocalLMIWF = CreateLandmarkInitializeWorkflow("LandmarkInitialize", interpMode, DoReverseMapping)
+        myLocalLMIWF = CreateLandmarkInitializeWorkflow("LandmarkInitialize", master_config, interpMode, PostACPCAlignToAtlas, DoReverseMapping, useEMSP, Debug=False)
 
         baw201.connect([(makePreprocessingOutList, myLocalLMIWF,
                          [(('T1s', get_list_element, 0), 'inputspec.inputVolume' )]),
@@ -451,7 +613,8 @@ def generate_single_session_template_WF(projectid, subjectid, sessionid, onlyT1,
                           ('atlasWeightFilename', 'inputspec.atlasWeightFilename'),
                           ('LLSModel', 'inputspec.LLSModel'),
                           ('inputTemplateModel', 'inputspec.inputTemplateModel'),
-                          ('template_t1', 'inputspec.atlasVolume')]),
+                          ('template_t1_denoised_gaussian', 'inputspec.atlasVolume'),
+                          ('EMSP','inputspec.EMSP')]),
                         (myLocalLMIWF, outputsSpec,
                          [('outputspec.outputResampledCroppedVolume', 'BCD_ACPC_T1_CROPPED'),
                           ('outputspec.outputLandmarksInACPCAlignedSpace',
@@ -479,12 +642,12 @@ def generate_single_session_template_WF(projectid, subjectid, sessionid, onlyT1,
         myLocalTCWF = CreateTissueClassifyWorkflow("TissueClassify", master_config, interpMode,useRegistrationMask)
         baw201.connect([(makePreprocessingOutList, myLocalTCWF, [('T1s', 'inputspec.T1List')]),
                         (makePreprocessingOutList, myLocalTCWF, [('T2s', 'inputspec.T2List')]),
+                        (makePreprocessingOutList, myLocalTCWF, [('PDs', 'inputspec.PDList')]),
+                        (makePreprocessingOutList, myLocalTCWF, [('FLs', 'inputspec.FLList')]),
+                        (makePreprocessingOutList, myLocalTCWF, [('OTHERs', 'inputspec.OTHERList')]),
                         (inputsSpec, myLocalTCWF, [('atlasDefinition', 'inputspec.atlasDefinition'),
-                                                   ('template_t1', 'inputspec.atlasVolume'),
-                                                   (('T1s', getAllT1sLength), 'inputspec.T1_count'),
-                                                   ('PDs', 'inputspec.PDList'),
-                                                   ('FLs', 'inputspec.FLList'),
-                                                   ('OTHERs', 'inputspec.OtherList')
+                                                   ('template_t1_denoised_gaussian', 'inputspec.atlasVolume'),
+                                                   (('T1s', getAllT1sLength), 'inputspec.T1_count')
                         ]),
                         (myLocalLMIWF, myLocalTCWF, [('outputspec.outputResampledCroppedVolume', 'inputspec.PrimaryT1'),
                                                      ('outputspec.atlasToSubjectTransform',
@@ -591,7 +754,7 @@ def generate_single_session_template_WF(projectid, subjectid, sessionid, onlyT1,
 
         baw201.connect([(inputsSpec, segWF,
                          [
-                             ('template_t1', 'inputspec.template_t1')
+                             ('template_t1_denoised_gaussian', 'inputspec.template_t1_denoised_gaussian')
                          ])
         ])
         baw201.connect([(atlasBCUTNode_W, segWF,
@@ -743,35 +906,44 @@ def generate_single_session_template_WF(projectid, subjectid, sessionid, onlyT1,
         baw201.connect(WhiteMatterHemisphereNode,'WM_LeftHemisphereFileName',DataSink,'WarpedAtlas2Subject.@LeftHemisphereWM')
         baw201.connect(WhiteMatterHemisphereNode,'WM_RightHemisphereFileName',DataSink,'WarpedAtlas2Subject.@RightHemisphereWM')
 
-    if 'malf_2012_neuro' in master_config['components']:  ## HACK Do MALF labeling
-        good_subjects = [
-            '1001', '1004', '1005','1011',
-            '1012', '1018', '1019', '1102',
-            '1103', '1104', '1120', '1129',
-            '1009', '1010', '1013', '1014',
-            '1036', '1109', '1117', '1122']
-
+    if 'jointfusion_2015_wholebrain' in master_config['components']:  ## HACK Do JointFusion labeling
         ## HACK FOR NOW SHOULD BE MORE ELEGANT FROM THE .config file
-        BASE_DATA_GRABBER_DIR='/Shared/johnsonhj/HDNI/Neuromorphometrics/20141116_Neuromorphometrics_base_Results/Neuromorphometrics/2012Subscription'
+        #if badT2:
+        #    onlyT1 = True
+        #if onlyT1:
+        #    print("T1 only processing in jointFusion")
+        #else:
+        #    print("Multimodal processing in jointFusion")
+        ###HACK, JointFusion is unstable with T2
+        ###HACK, JointFusion is unstable with T2
+        ###HACK, JointFusion is unstable with T2
+        ###HACK, JointFusion is unstable with T2
+        onlyT1 = True
+        myLocalJointFusion = CreateJointFusionWorkflow("JointFusion", onlyT1, master_config)
+        baw201.connect(myLocalTCWF,'outputspec.t1_average',myLocalJointFusion,'inputspec.subj_t1_image')
+        baw201.connect(myLocalTCWF,'outputspec.t2_average',myLocalJointFusion,'inputspec.subj_t2_image')
+        baw201.connect(myLocalBrainStemWF, 'outputspec.ouputTissuelLabelFilename',myLocalJointFusion,'inputspec.subj_fixed_head_labels')
 
-        myLocalMALF = CreateMALFWorkflow("MALF", master_config,good_subjects,BASE_DATA_GRABBER_DIR)
-        baw201.connect(myLocalTCWF,'outputspec.t1_average',myLocalMALF,'inputspec.subj_t1_image')
-        baw201.connect(myLocalBrainStemWF, 'outputspec.ouputTissuelLabelFilename',myLocalMALF,'inputspec.subj_fixed_head_labels')
+        baw201.connect(BResample['template_leftHemisphere'],'outputVolume',myLocalJointFusion,'inputspec.subj_left_hemisphere')
+        baw201.connect(myLocalLMIWF, 'outputspec.outputLandmarksInACPCAlignedSpace' ,myLocalJointFusion,'inputspec.subj_lmks')
+        baw201.connect(atlasBCDNode_S,'template_weights_50Lmks_wts',myLocalJointFusion,'inputspec.atlasWeightFilename')
 
-        baw201.connect(BResample['template_leftHemisphere'],'outputVolume',myLocalMALF,'inputspec.subj_left_hemisphere')
-        baw201.connect(myLocalLMIWF, 'outputspec.outputLandmarksInACPCAlignedSpace' ,myLocalMALF,'inputspec.subj_lmks')
-        baw201.connect(atlasBCDNode_S,'template_weights_50Lmks_wts',myLocalMALF,'inputspec.atlasWeightFilename')
-
-        inputLabelFileMALFnameSpec = pe.Node( interface=IdentityInterface( fields=['labelBaseFilename']),
+        inputLabelFileJointFusionnameSpec = pe.Node( interface=IdentityInterface( fields=['labelBaseFilename']),
                                               run_without_submitting = True,
-                                              name=inputLabelFileMALFnameSpec)
-        baw201.connect( inputLabelFileMALFnameSpec, 'labelBaseFilename',
-                        myLocalMALF, 'inputspec.labelBaseFilename')
+                                              name="inputLabelFileJointFusionnameSpec")
+        baw201.connect( inputLabelFileJointFusionnameSpec, 'labelBaseFilename',
+                        myLocalJointFusion, 'inputspec.labelBaseFilename')
 
-        baw201.connect(myLocalMALF,'outputspec.MALF_neuro2012_labelmap',DataSink,'TissueClassify.@MALF_neuro2012_labelmap')
-        baw201.connect(myLocalMALF,'outputspec.MALF_fswm_extended_neuro2012_labelmap',DataSink,'TissueClassify.@MALF_fswm_extended_neuro2012_labelmap')
-        baw201.connect(myLocalMALF,'outputspec.MALF_fswm_standard_neuro2012_labelmap',DataSink,'TissueClassify.@MALF_fswm_standard_neuro2012_labelmap')
-        baw201.connect(myLocalMALF,'outputspec.MALF_fswm_lobar_neuro2012_labelmap',DataSink,'TissueClassify.@MALF_fswm_lobar_neuro2012_labelmap')
-        baw201.connect(myLocalMALF,'outputspec.MALF_extended_snapshot',DataSink,'TissueClassify.@MALF_extended_snapshot')
+        #baw201.connect(myLocalJointFusion,'outputspec.JointFusion_HDAtlas20_2015_label',DataSink,'JointFusion.@JointFusion_HDAtlas20_2015_label')
+        #baw201.connect(myLocalJointFusion,'outputspec.JointFusion_HDAtlas20_2015_CSFVBInjected_label',DataSink,'JointFusion.@JointFusion_HDAtlas20_2015_CSFVBInjected_label')
+        baw201.connect(myLocalJointFusion,'outputspec.JointFusion_HDAtlas20_2015_fs_standard_label',DataSink,'JointFusion.@JointFusion_HDAtlas20_2015_fs_standard_label')
+        baw201.connect(myLocalJointFusion,'outputspec.JointFusion_HDAtlas20_2015_lobe_label',DataSink,'JointFusion.@JointFusion_HDAtlas20_2015_lobe_label')
+        #baw201.connect(myLocalJointFusion,'outputspec.JointFusion_extended_snapshot',DataSink,'JointFusion.@JointFusion_extended_snapshot')
+        baw201.connect(myLocalJointFusion,'outputspec.JointFusion_HDAtlas20_2015_dustCleaned_label', DataSink, 'JointFusion.@JointFusion_HDAtlas20_2015_dustCleaned_label')
+
+        baw201.connect(myLocalJointFusion,'outputspec.JointFusion_volumes_csv', DataSink, 'JointFusion.allVol.@JointFusion_volumesCSV')
+        baw201.connect(myLocalJointFusion,'outputspec.JointFusion_volumes_json', DataSink, 'JointFusion.allVol.@JointFusion_volumesJSON')
+        baw201.connect(myLocalJointFusion,'outputspec.JointFusion_lobe_volumes_csv', DataSink, 'JointFusion.lobeVol.@JointFusion_lobe_volumesCSV')
+        baw201.connect(myLocalJointFusion,'outputspec.JointFusion_lobe_volumes_json', DataSink, 'JointFusion.lobeVol.@JointFusion_lobe_volumesJSON')
 
     return baw201

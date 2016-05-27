@@ -29,7 +29,7 @@
 #define __landmarksConstellationCommon_h
 
 // Use linear interpolation to keep the processing quick.
-#define __QUICK_RUNS_APPROXIMATION__
+//RM #define __QUICK_RUNS_APPROXIMATION__
 
 #include <cstdio>      // TODO: This include file should be removed, prefer constructs
                        // from the std library
@@ -72,7 +72,9 @@
 #include "itkExtractImageFilter.h"
 #include "itkStatisticsImageFilter.h"
 #include "itkFlipImageFilter.h"
-#include "vcl_algorithm.h"
+#include <vcl_compiler.h>
+#include <iostream>
+#include "algorithm"
 #include "itkImageDuplicator.h"
 #include "itkEuler3DTransform.h"
 #include <vnl/vnl_cross.h>
@@ -83,12 +85,14 @@
 
 #include "Slicer3LandmarkIO.h"
 
+#if 0 //RM
 extern const unsigned int MAX_ROTATIONS_TESTED;
 extern const unsigned int MAXITER;
 extern const unsigned int DEL;
 extern const unsigned int YES;
-extern const unsigned int NO;
 extern const unsigned int SMAX;
+#endif
+extern const unsigned int NO;
 namespace LMC
 {
 extern bool debug;
@@ -101,13 +105,15 @@ extern bool globalverboseFlag;
 
 namespace // avoid 'shadows declaration' warnings.
 {
-typedef float                 vertexType[4][3];
+//RM typedef float                 vertexType[4][3];
 typedef itk::Image<short, 3>  SImageType;
 typedef itk::Image<double, 3> DImageType3D;
 typedef itk::Image<float, 3>  FImageType3D;
-// typedef itk::Image<short,2> SImageType2D;
-typedef itk::Image<double, 2> DImageType2D;
-typedef itk::Image<float, 2>  FImageType2D;
+//RM typedef itk::Image<short,2> SImageType2D;
+//RM typedef itk::Image<double, 2> DImageType2D;
+//RM typedef itk::Image<float, 2>  FImageType2D;
+
+typedef itk::Image<unsigned char, 3> ByteImageType;
 
 typedef SImageType::PointType                   SImagePointType;
 
@@ -124,7 +130,7 @@ typedef itk::LinearInterpolateImageFunction<SImageType, double>        LinearInt
 
 #include "landmarksConstellationModelIO.h"
 
-extern VersorTransformType::Pointer ConvertToVersorRigid3D(RigidTransformType::Pointer RT);
+//RM extern VersorTransformType::Pointer ConvertToVersorRigid3D(RigidTransformType::Pointer RT);
 
 extern std::string globalResultsDir;
 extern int         globalImagedebugLevel;
@@ -144,6 +150,7 @@ extern SImageType::Pointer CreateTestCenteredRotatedImage2(const RigidTransformT
                                                            /*const*/ SImageType::Pointer & image,
                                                            const RigidTransformType::Pointer & Point_Rotate);
 
+#if 0 //RM
 extern itk::Matrix<double, 3, 3> GetMatrixInverse(const itk::Matrix<double, 3, 3> & input);
 
 // extern itk::Matrix<double,3,3> CreateRotationMatrixFromAngles(const double
@@ -160,30 +167,34 @@ extern void defineTemplateIndexLocations(const int r, const int h,
 
 extern int computeTemplateSize(const int r, const int h);
 
+#endif
 extern void decomposeRPAC(const SImageType::PointType & RP, const SImageType::PointType & PC,
-                          const SImageType::PointType & AC, float *const RPPC_to_RPAC_angle,
-                          float *const RPAC_over_RPPC);
+                          const SImageType::PointType & AC, double *const RPPC_to_RPAC_angle,
+                          double *const RPAC_over_RPPC);
 
 extern void MakeLabelImage(SImageType::Pointer in, const SImageType::PointType & RP, const SImageType::PointType & AC,
                            const SImageType::PointType & PC, const SImageType::PointType & VN4,
                            const std::string & fname);
 
+#if 0 //RM
 extern SImageType::PointType::VectorType initialAC(const SImageType::PointType & RP, const SImageType::PointType & PC,
                                                    const double RPPC_to_RPAC_angleMean,
                                                    const double RPAC_over_RPPCMean);
+#endif
 
-typedef itk::Statistics::MersenneTwisterRandomVariateGenerator RandomGeneratorType;
-typedef RandomGeneratorType::Pointer                           RandomGeneratorPointer;
-extern RandomGeneratorPointer _RandomGenerator;
-extern double GetRandomZeroOneDouble(void);
+//RM typedef itk::Statistics::MersenneTwisterRandomVariateGenerator RandomGeneratorType;
+//RM typedef RandomGeneratorType::Pointer                           RandomGeneratorPointer;
+//RM extern RandomGeneratorPointer _RandomGenerator;
+//RM extern double GetRandomZeroOneDouble(void);
 
-extern void InitializeRandomZeroOneDouble(RandomGeneratorType::IntegerType rseed);
+//RM extern void InitializeRandomZeroOneDouble(RandomGeneratorType::IntegerType rseed);
 
 extern void ComputeMSP(SImageType::Pointer image, RigidTransformType::Pointer & Tmsp,
                        SImageType::Pointer & transformedImage, const SImageType::PointType & centerOfHeadMass,
                        const int qualityLevel, double & cc);
 
-extern void ComputeMSP(SImageType::Pointer image, RigidTransformType::Pointer & Tmsp, const int qualityLevel);
+extern void ComputeMSP_Easy(SImageType::Pointer image, RigidTransformType::Pointer & Tmsp,
+                            const SImageType::PointType & centerOfHeadMass, const int qualityLevel);
 
 extern SImageType::Pointer CreatedebugPlaneImage(SImageType::Pointer referenceImage,
                                                  const RigidTransformType::Pointer MSPTransform,
@@ -210,7 +221,7 @@ ValuesType vectorNorm(const std::vector<ValuesType> & x)
     const ValuesType value = *it;
     norm += value * value;
     }
-  return vcl_sqrt(norm);
+  return std::sqrt(norm);
 }
 
 /*
@@ -239,7 +250,7 @@ void normalizeVector(std::vector<ValuesType> & x)
 {
   const ValuesType norm = vectorNorm(x);
 
-  if( norm < vcl_numeric_limits<ValuesType>::epsilon() )
+  if( norm < std::numeric_limits<ValuesType>::epsilon() )
     {
     std::cout << "WARNING:  ZERO NORM VECTOR." << __FILE__ << __LINE__ << std::endl;
     return;
@@ -320,6 +331,7 @@ void extractArray(
   const landmarksConstellationModelIO::IndexLocationVectorType & model,
   std::vector<float> & result_array);
 
+#if 0 //RM
 inline
 static std::string
 PrefixName(const char *prefix, const std::string & name)
@@ -336,6 +348,7 @@ PrefixName(const char *prefix, const std::string & name)
   rval += itksys::SystemTools::GetFilenameName(name);
   return rval;
 }
+#endif
 
 #include <itkMinimumMaximumImageFilter.h>
 #include <itkScalarImageToHistogramGenerator.h>
@@ -473,7 +486,7 @@ double standardDeviation(DType *x, int n)
   sd = ( sxx - sx * sx / n ) / n;
   if( sd > 0.0 )
     {
-    sd = vcl_sqrt(sd);
+    sd = std::sqrt(sd);
     }
   else
     {
@@ -505,7 +518,7 @@ double pearsonCorrelation(DTypeX *x, DTypeY *y, int n)
   Sxy = n * sxy - sx * sy;
   if( Sxx * Syy > 0.0 )
     {
-    dum = vcl_sqrt(Sxx * Syy);
+    dum = std::sqrt(Sxx * Syy);
     }
   if( dum != 0.0 )
     {
@@ -531,7 +544,7 @@ void partialCorrelation(DTypeY *Y, DTypeX *X1, DTypeX *X2, int n, double *pr1, d
   dum2 = ( 1.0 - rY1 * rY1 ) * ( 1 - r12 * r12 );
   if( dum1 > 0.0 )
     {
-    *pr1 = ( rY1 - rY2 * r12 ) / vcl_sqrt(dum1);
+    *pr1 = ( rY1 - rY2 * r12 ) / std::sqrt(dum1);
     }
   else
     {
@@ -539,7 +552,7 @@ void partialCorrelation(DTypeY *Y, DTypeX *X1, DTypeX *X2, int n, double *pr1, d
     }
   if( dum2 > 0.0 )
     {
-    *pr2 = ( rY2 - rY1 * r12 ) / vcl_sqrt(dum2);
+    *pr2 = ( rY2 - rY1 * r12 ) / std::sqrt(dum2);
     }
   else
     {
@@ -614,7 +627,7 @@ independent_samples_t(DType *x1, int n1, DType *x2, int n2, int *df, double *mea
   var1 = sample_variance<DType>(x1, n1, &mean1);
   var2 = sample_variance<DType>(x2, n2, &mean2);
   var = ( ( ( n1 - 1 ) * var1 + ( n2 - 1 ) * var2 ) / ( n1 + n2 - 2.0 ) ) * ( 1.0 / n1 + 1.0 / n2 );
-  sd = vcl_sqrt(var);
+  sd = std::sqrt(var);
   if( sd == 0.0 )
     {
     return 0.0;
@@ -643,7 +656,7 @@ paired_samples_t(DType *x1, DType *x2, int n, int *df, double *meandiff)
     x1[i] -= x2[i];
     }
   var = sample_variance<double>(x1, n, &mean) / n;
-  sd = vcl_sqrt(var);
+  sd = std::sqrt(var);
   if( sd == 0.0 )
     {
     return 0.0;
@@ -653,7 +666,9 @@ paired_samples_t(DType *x1, DType *x2, int n, int *df, double *meandiff)
   return t;
 }
 #endif
-
+#if 0
 template<class TScalarType>
 extern void WriteTransformToDisk( itk::Transform<TScalarType, 3, 3> * myTransform , const std::string & filename  );
+#endif
+
 #endif

@@ -40,8 +40,6 @@
 #include "itksys/SystemTools.hxx"
 #include "PrettyPrintTable.h"
 #include "DenoiseFiltering.h"
-#include "itkBRAINSROIAutoImageFilter.h"
-
 
 #include "mu.h"
 #include "EMSParameters.h"
@@ -117,171 +115,29 @@ GetStrippedImageFileNameExtension(const std::string & ImageFileName)
   ExtensionsToRemove[5] = ".nrrd";
 
   std::string returnString = itksys::SystemTools::GetFilenameName( ImageFileName );
-  for( size_t s = 0; s < ExtensionsToRemove.size(); s++ )
+  for(auto & elem : ExtensionsToRemove)
     {
-    size_t rfind_location = returnString.rfind(ExtensionsToRemove[s]);
+    size_t rfind_location = returnString.rfind(elem);
     if( ( rfind_location != std::string::npos )
-        && ( rfind_location == ( returnString.size() - ExtensionsToRemove[s].size() ) )
+        && ( rfind_location == ( returnString.size() - elem.size() ) )
       )
       {
-      returnString.replace(rfind_location, ExtensionsToRemove[s].size(), "");
+      returnString.replace(rfind_location, elem.size(), "");
       }
     }
   return returnString;
 }
 
 
-//
-// debug output for map of vector structure
-template <typename TMap>
-void
-PrintMapOfImageVectors(const TMap &map)
-{
-  muLogMacro(<< "Map size: " << map.size() << std::endl);
-  for(typename TMap::const_iterator mapIt = map.begin();
-      mapIt != map.end(); ++mapIt)
-    {
-    muLogMacro(<< "  " << mapIt->first << "(" << mapIt->second.size() <<"):" << std::endl);
-    for(unsigned i = 0; i < mapIt->second.size(); ++i)
-      {
-      muLogMacro( << "    " << mapIt->second[i].GetPointer()
-                  << mapIt->second[i]->GetLargestPossibleRegion()
-                  << " " << mapIt->second[i]->GetBufferedRegion()
-                  << std::endl );
-      }
-    }
-}
-// /////
-//
-//
-//
-AtlasRegType::MapOfFloatImageVectors
-ResampleImageList(const std::string & resamplerInterpolatorType,
-                  AtlasRegType::MapOfFloatImageVectors inputImageMap,
-                  AtlasRegType::MapOfTransformLists & intraSubjectTransforms,
-                  FloatImageType::ConstPointer KeyImageFirstRead)
-{
-  // Clear image list
-  AtlasRegType::MapOfFloatImageVectors outputImageMap;
-
-  const FloatImageType::PixelType outsideFOVCode = vnl_huge_val( static_cast<FloatImageType::PixelType>( 1.0f ) );
-  PrintMapOfImageVectors(inputImageMap);
-  // Resample the other images
-  for(AtlasRegType::MapOfFloatImageVectors::iterator inputImageMapIter = inputImageMap.begin();
-      inputImageMapIter != inputImageMap.end(); ++inputImageMapIter)
-    {
-    AtlasRegType::FloatImageVector::iterator currImageIter = inputImageMapIter->second.begin();
-    unsigned int i(0);
-    AtlasRegType::TransformList::iterator xfrmIt = intraSubjectTransforms[inputImageMapIter->first].begin();
-    while( currImageIter != inputImageMapIter->second.end() )
-      {
-      muLogMacro(<< "Resampling input image " << inputImageMapIter->first << " #" << i << "." << std::endl);
-      typedef itk::ResampleImageFilter<FloatImageType, FloatImageType> ResampleType;
-      typedef ResampleType::Pointer                                    ResamplePointer;
-      ResamplePointer resampler = ResampleType::New();
-      resampler->SetInput((*currImageIter));
-      resampler->SetTransform((*xfrmIt));
-
-      if( resamplerInterpolatorType == "BSpline" )
-        {
-        typedef itk::BSplineInterpolateImageFunction<FloatImageType, double, double>
-          SplineInterpolatorType;
-
-        // Spline interpolation, only available for input images, not
-        // atlas
-        SplineInterpolatorType::Pointer splineInt
-          = SplineInterpolatorType::New();
-        splineInt->SetSplineOrder(5);
-        resampler->SetInterpolator(splineInt);
-        }
-      else if( resamplerInterpolatorType == "WindowedSinc" )
-        {
-        typedef itk::ConstantBoundaryCondition<FloatImageType>
-          BoundaryConditionType;
-        static const unsigned int WindowedSincHammingWindowRadius = 5;
-        typedef itk::Function::HammingWindowFunction<
-          WindowedSincHammingWindowRadius, double, double> WindowFunctionType;
-        typedef itk::WindowedSincInterpolateImageFunction
-          <FloatImageType,
-          WindowedSincHammingWindowRadius,
-          WindowFunctionType,
-          BoundaryConditionType,
-          double>    WindowedSincInterpolatorType;
-        WindowedSincInterpolatorType::Pointer windowInt
-          = WindowedSincInterpolatorType::New();
-        resampler->SetInterpolator(windowInt);
-        }
-      else // Default to m_UseNonLinearInterpolation == "Linear"
-        {
-        typedef itk::LinearInterpolateImageFunction<FloatImageType, double>
-          LinearInterpolatorType;
-        LinearInterpolatorType::Pointer linearInt
-          = LinearInterpolatorType::New();
-        resampler->SetInterpolator(linearInt);
-        }
-
-      resampler->SetDefaultPixelValue(outsideFOVCode);
-      resampler->SetOutputParametersFromImage(KeyImageFirstRead);
-      resampler->Update();
-
-      // Zero the mask region outside FOV and also the intensities with
-      // outside
-      // FOV code
-      typedef itk::ImageRegionIterator<FloatImageType> InternalIteratorType;
-
-      FloatImageType::Pointer tmp = resampler->GetOutput();
-      InternalIteratorType    tmpIt( tmp, tmp->GetLargestPossibleRegion() );
-
-      //TODO:  This code below with masking does not make sense.
-      //        intraSubjectFOVIntersectionMask does not seem to do anything.
-      // HACK:  We can probably remove the mask generation from here.
-      // The FOV mask, regions where intensities in all channels do not
-      // match FOV code
-      ByteImageType::Pointer intraSubjectFOVIntersectionMask = ByteImageType::New();
-      intraSubjectFOVIntersectionMask->CopyInformation(KeyImageFirstRead);
-      intraSubjectFOVIntersectionMask->SetRegions( KeyImageFirstRead->GetLargestPossibleRegion() );
-      intraSubjectFOVIntersectionMask->Allocate();
-      intraSubjectFOVIntersectionMask->FillBuffer(1);
-      typedef itk::ImageRegionIterator<ByteImageType> MaskIteratorType;
-      MaskIteratorType maskIt( intraSubjectFOVIntersectionMask,
-        intraSubjectFOVIntersectionMask->GetLargestPossibleRegion() );
-      maskIt.GoToBegin();
-      tmpIt.GoToBegin();
-      while( !maskIt.IsAtEnd() )
-        {
-        if( tmpIt.Get() == outsideFOVCode )  // Voxel came from outside
-          // the original FOV during
-          // registration, so
-          // invalidate it.
-          {
-          maskIt.Set(0); // Set it as an invalid voxel in
-          // intraSubjectFOVIntersectionMask
-          tmpIt.Set(0);  // Set image intensity value to zero.
-          }
-        ++maskIt;
-        ++tmpIt;
-        }
-
-      // Add the image
-      outputImageMap[inputImageMapIter->first].push_back(tmp);
-      ++currImageIter;
-      ++xfrmIt;
-      ++i;
-      }
-    }
-  return outputImageMap;
-}
-
 static AtlasRegType::MapOfFloatImageVectors
 RescaleFunctionLocal( AtlasRegType::MapOfFloatImageVectors& localList)
 {
   AtlasRegType::MapOfFloatImageVectors rval;
 
-  for(AtlasRegType::MapOfFloatImageVectors::iterator mapIt = localList.begin();
-      mapIt != localList.end(); ++mapIt)
+  for(auto & elem : localList)
     {
-    for(AtlasRegType::FloatImageVector::iterator imIt = mapIt->second.begin();
-        imIt != mapIt->second.end(); ++imIt)
+    for(auto imIt = elem.second.begin();
+        imIt != elem.second.end(); ++imIt)
       {
       typedef itk::RescaleIntensityImageFilter<FloatImageType, FloatImageType>
         RescaleType;
@@ -295,7 +151,7 @@ RescaleFunctionLocal( AtlasRegType::MapOfFloatImageVectors& localList)
       FloatImageType::Pointer tmp = (*imIt);
       rescaler->SetInput(tmp);
       rescaler->Update();
-      rval[mapIt->first].push_back(rescaler->GetOutput());
+      rval[elem.first].push_back(rescaler->GetOutput());
 // #if !defined( INPLACE_RESCALER)
 //       (*imIt)  = rescaler->GetOutput();
 // #endif
@@ -311,8 +167,8 @@ AtlasRegType::MapOfStringVectors
 CreateTypedMap(const AtlasRegType::StringVector &keys, const AtlasRegType::StringVector &values)
 {
   AtlasRegType::MapOfStringVectors rval;
-  AtlasRegType::StringVector::const_iterator keyIt(keys.begin());
-  AtlasRegType::StringVector::const_iterator valueIt(values.begin());
+  auto keyIt(keys.begin());
+  auto valueIt(values.begin());
   for( ; keyIt != keys.end() && valueIt != values.end(); ++keyIt, ++valueIt)
     {
     rval[(*keyIt)].push_back((*valueIt));
@@ -320,12 +176,16 @@ CreateTypedMap(const AtlasRegType::StringVector &keys, const AtlasRegType::Strin
   return rval;
 }
 
+//For the BRAINSABC program, we also need to minimize num threads used by TBB
+#include "tbb/task_scheduler_init.h"
 
 int main(int argc, char * *argv)
 {
   PARSE_ARGS;
   BRAINSRegisterAlternateIO();
   const BRAINSUtils::StackPushITKDefaultNumberOfThreads TempDefaultNumberOfThreadsHolder(numberOfThreads);
+  // Construct TBB task scheduler with matching threads to ITK threads
+  tbb::task_scheduler_init init( itk::MultiThreader::GetGlobalDefaultNumberOfThreads() );
 
   // TODO:  Need to figure out how to conserve memory better during the running
   // of this application:  itk::DataObject::GlobalReleaseDataFlagOn();
@@ -563,7 +423,7 @@ int main(int argc, char * *argv)
   currentRow++;
   for( unsigned int pwi = 0; pwi < PriorNames.size(); pwi++ )
     {
-    std::map<std::string, AtlasDefinition::BoundsType> temp_range_List;
+    orderedmap<std::string, AtlasDefinition::BoundsType> temp_range_List;
     for( unsigned int tt = 0; tt < input_VolumeTypes.size(); tt++ )
       {
       AtlasDefTable.add(currentRow + tt * 2 + 0, 0, std::string(input_VolumeTypes[tt]) + std::string(" Lower") );
@@ -592,10 +452,8 @@ int main(int argc, char * *argv)
              << gridSize[1] << " X "
              << gridSize[2] << std::endl );
   muLogMacro(<< std::endl );
-  muLogMacro(<< "=== Start ===\n");
-  muLogMacro(<< "Registering images using affine transform...\n");
+  muLogMacro(<< "=== Start Registration ===\n");
 
-  typedef itk::Transform<double, 3, 3> GenericTransformType;
   GenericTransformType::Pointer atlasToSubjectPreSegmentationTransform = ITK_NULLPTR;
 
   AtlasRegType::MapOfFloatImageVectors atlasOriginalImageList;
@@ -631,27 +489,30 @@ int main(int argc, char * *argv)
 
   AtlasRegType::MapOfStringVectors templateVolumes;
   const AtlasDefinition::TemplateMap &tm = atlasDefinitionParser.GetTemplateVolumes();
-  for(AtlasRegType::MapOfStringVectors::iterator typeIt = inputVolumeMap.begin();
-      typeIt != inputVolumeMap.end(); ++typeIt)
+  for(auto & elem : inputVolumeMap)
     {
-    AtlasDefinition::TemplateMap::const_iterator ti = tm.find(typeIt->first);
+    auto ti = tm.find(elem.first);
     std::string temp;
     if( ti != tm.end() )
       {
       temp = ti->second;
-      std::cerr << "STATUS:  Atlas image of type: " << typeIt->first
+      std::cerr << "STATUS:  Atlas image of type: " << elem.first
                 << " added with filename: " << temp << std::endl;
+      }
+    else if( elem.first.compare("IDWI") == 0 ) // do not throw when IDWI is an input type
+      {
+      std::cerr << "WARNING: No atlas image of type IDWI." << std::endl;
       }
     else
       {
-      std::cerr << "ERROR:  Atlas image of type: " << typeIt->first
+      std::cerr << "ERROR:  Atlas image of type: " << elem.first
                 << " not found in xml file." << std::endl;
       throw;
       }
-    for(AtlasRegType::StringVector::const_iterator imIt = typeIt->second.begin();
-        imIt != typeIt->second.end(); ++imIt)
+    for(AtlasRegType::StringVector::const_iterator imIt = elem.second.begin();
+        imIt != elem.second.end(); ++imIt)
       {
-      templateVolumes[typeIt->first].push_back(temp);
+      templateVolumes[elem.first].push_back(temp);
       }
     }
   std::vector<bool> candidateDuplicatesList;
@@ -666,9 +527,9 @@ int main(int argc, char * *argv)
 
   atlasreg->SetSuffix(defaultSuffix);
   // Compute list of file names for the atlasOriginalPriors
-  for( unsigned int q = 0; q < PriorNames.size(); q++ )
+  for(auto & PriorName : PriorNames)
     {
-    priorfnlist.push_back( atlasDefinitionParser.GetPriorFilename( PriorNames[q] ) );
+    priorfnlist.push_back( atlasDefinitionParser.GetPriorFilename( PriorName ) );
     }
 
   {
@@ -692,13 +553,13 @@ int main(int argc, char * *argv)
 
   AtlasRegType::MapOfStringVectors intraSubjectTransformFileNames;
   unsigned int i = 0;
-  for(AtlasRegType::MapOfStringVectors::iterator typeIt = inputVolumeMap.begin();
+  for(auto typeIt = inputVolumeMap.begin();
       typeIt != inputVolumeMap.end(); ++typeIt)
     {
     for( AtlasRegType::StringVector::const_iterator imIt = typeIt->second.begin();
          imIt != typeIt->second.end(); ++imIt,++i )
       {
-      muLogMacro(<< "Reading image " << ": " << (*imIt) << "...\n");
+      muLogMacro(<< "\n***Reading image " << ": " << (*imIt) << "...\n");
 
       LocalReaderPointer imgreader = LocalReaderType::New();
       imgreader->SetFileName( (*imIt).c_str() );
@@ -731,15 +592,15 @@ int main(int argc, char * *argv)
       if( localFilterTimeStep <= 0 )
         {
         FloatImageType::SpacingType::ValueType minPixelSize =
-          vcl_numeric_limits<FloatImageType::SpacingType::ValueType>::max();
+          std::numeric_limits<FloatImageType::SpacingType::ValueType>::max();
         const FloatImageType::SpacingType & imageSpacing = curImage->GetSpacing();
-        for( int is = 0; is < FloatImageType::ImageDimension; ++is )
+        for( FloatImageType::ImageDimensionType is = 0; is < FloatImageType::ImageDimension; ++is )
           {
-          minPixelSize = vcl_min( minPixelSize, imageSpacing[is]);
+          minPixelSize = std::min( minPixelSize, imageSpacing[is]);
           }
         localFilterTimeStep =
-          ( (minPixelSize - vcl_numeric_limits<FloatImageType::SpacingType::ValueType>::epsilon() )
-            / ( vcl_pow(2.0, FloatImageType::ImageDimension + 1 ) )
+          ( (minPixelSize - std::numeric_limits<FloatImageType::SpacingType::ValueType>::epsilon() )
+            / ( std::pow(2.0, static_cast<double>(FloatImageType::ImageDimension + 1) ) )
             );
         }
       FloatImagePointer denoisedImage =
@@ -788,14 +649,14 @@ int main(int argc, char * *argv)
     }
 
   typedef itk::ImageFileReader<FloatImageType> LocalReaderType;
-  typedef LocalReaderType::Pointer                  LocalReaderPointer;
+  typedef LocalReaderType::Pointer             LocalReaderPointer;
 
 
-  for(AtlasRegType::MapOfStringVectors::iterator mapIt = templateVolumes.begin();
+  for(auto mapIt = templateVolumes.begin();
       mapIt != templateVolumes.end(); ++mapIt)
     {
     const std::string curAtlasName = FindPathFromAtlasXML(*(mapIt->second.begin()),atlasDefinitionPath);
-    muLogMacro(<< "Reading atlas image " << mapIt->first << ": " << curAtlasName << "...\n");
+    muLogMacro(<< "\n***Reading atlas image " << mapIt->first << ": " << curAtlasName << "...\n");
     LocalReaderPointer imgreader = LocalReaderType::New();
     imgreader->SetFileName(curAtlasName.c_str());
     try
@@ -818,7 +679,7 @@ int main(int argc, char * *argv)
     muLogMacro( << "done." << std::endl );
     // the atlas pointers are all the same and parallel the input
     // image map of lists structure
-    for(AtlasRegType::StringVector::iterator nameIt = mapIt->second.begin();
+    for(auto nameIt = mapIt->second.begin();
         nameIt != mapIt->second.end(); ++nameIt)
       {
       atlasOriginalImageList[mapIt->first].push_back(img_i);
@@ -840,11 +701,32 @@ int main(int argc, char * *argv)
 
   atlasreg->SetAtlasOriginalImageList(atlasOriginalImageList);
 
-  const std::string atlasTransformFileName = outputDir
-    + GetStrippedImageFileNameExtension(GetMapVectorFirstElement(templateVolumes))
-    + std::string("_to_")
-    + GetStrippedImageFileNameExtension(input_Volumes[0]) + suffixstr
-    + std::string("PreSegmentation.h5");
+  std::string atlasTransformFileName = "";
+  if( atlasToSubjectTransform != "" )
+    {
+    // If this final transform filename exists,
+    // it will be just read in and will be used directly
+    // without doing registration.
+    const bool doesExist = itksys::SystemTools::FileExists( atlasToSubjectTransform.c_str() );
+    if( doesExist )
+      {
+      atlasTransformFileName = atlasToSubjectTransform;
+      }
+    else
+      {
+      atlasTransformFileName = GetStrippedImageFileNameExtension(atlasToSubjectTransform)
+        + std::string("PreSegmentation.h5");
+      }
+    }
+  else
+    {
+    atlasTransformFileName = outputDir
+      + GetStrippedImageFileNameExtension(GetMapVectorFirstElement(templateVolumes))
+      + std::string("_to_")
+      + GetStrippedImageFileNameExtension(input_Volumes[0]) + suffixstr
+      + std::string("PreSegmentation.h5");
+    }
+
   atlasreg->SetAtlasToSubjectTransformFileName(atlasTransformFileName);
   }
 
@@ -863,14 +745,12 @@ int main(int argc, char * *argv)
     }
 
   if( !( ( subjectIntermodeTransformType.compare("Identity") == 0 )
-         || ( subjectIntermodeTransformType.compare("Rigid") == 0 )
-         || ( subjectIntermodeTransformType.compare("Affine") == 0 )
-         || ( subjectIntermodeTransformType.compare("BSpline") == 0 )
-         || ( subjectIntermodeTransformType.compare("SyN") == 0 ) )
+         || ( subjectIntermodeTransformType.compare("Rigid") == 0 ) )
     )
     {
     muLogMacro("ERROR:  Invalid subjectIntermodeTransformType specified"
-               << subjectIntermodeTransformType << std::endl);
+               << subjectIntermodeTransformType << std::endl
+               << "Only Identity or Rigid transforms are allowed." << std::endl);
     return EXIT_FAILURE;
     }
 
@@ -1019,17 +899,13 @@ int main(int argc, char * *argv)
   // ::ResampleImages()
   {
   // muLogMacro(<< "ResampleImages");
-
-  // Define the internal reader type
-  typedef itk::ResampleImageFilter<FloatImageType, FloatImageType> ResampleType;
-
   intraSubjectRegisteredImageMap =
-    ResampleImageList(resamplerInterpolatorType, intraSubjectNoiseRemovedImageMap,
-                      intraSubjectTransforms,atlasreg->GetKeySubjectImage());
+    ResampleInPlaceImageList(resamplerInterpolatorType, intraSubjectNoiseRemovedImageMap,
+                             intraSubjectTransforms);
 
   intraSubjectRegisteredRawImageMap =
-    ResampleImageList(resamplerInterpolatorType, intraSubjectRawImageMap,
-                      intraSubjectTransforms,atlasreg->GetKeySubjectImage());
+    ResampleInPlaceImageList(resamplerInterpolatorType, intraSubjectRawImageMap,
+                             intraSubjectTransforms);
   //TODO: The maps size needs to be the same, but so do the lists within the maps.
   assert( intraSubjectRegisteredImageMap.size() == intraSubjectNoiseRemovedImageMap.size() );
   assert( intraSubjectRegisteredImageMap.size() == intraSubjectRawImageMap.size() );
@@ -1085,12 +961,10 @@ int main(int argc, char * *argv)
       writer->UseCompressionOn();
       writer->Update();
       }
-    for(AtlasRegType::MapOfFloatImageVectors::iterator mapIt
-          = intraSubjectRegisteredRawImageMap.begin();
-        mapIt != intraSubjectRegisteredRawImageMap.end(); ++mapIt)
+    for(auto & elem : intraSubjectRegisteredRawImageMap)
       {
 
-      for(unsigned i = 0; i < mapIt->second.size(); ++i)
+      for(unsigned i = 0; i < elem.second.size(); ++i)
         {
         typedef itk::RescaleIntensityImageFilter<FloatImageType, ShortImageType>
           ShortRescaleType;
@@ -1098,11 +972,11 @@ int main(int argc, char * *argv)
         ShortRescaleType::Pointer rescaler = ShortRescaleType::New();
         rescaler->SetOutputMinimum(0);
         rescaler->SetOutputMaximum(MAX_IMAGE_OUTPUT_VALUE);
-        rescaler->SetInput(mapIt->second[i]);
+        rescaler->SetInput(elem.second[i]);
         rescaler->Update();
 
         std::string fn = outputDir
-          + GetStrippedImageFileNameExtension(inputVolumeMap[mapIt->first][i])
+          + GetStrippedImageFileNameExtension(inputVolumeMap[elem.first][i])
           + std::string("_registered") + suffstr;
 
         typedef itk::ImageFileWriter<ShortImageType> ShortWriterType;
@@ -1125,12 +999,53 @@ int main(int argc, char * *argv)
   intraSubjectRegisteredImageMap = RescaleFunctionLocal(intraSubjectRegisteredImageMap);
   intraSubjectRegisteredRawImageMap = RescaleFunctionLocal(intraSubjectRegisteredRawImageMap);
   }
+  /*
+   ------------------------------------
+   *** BRAINSABC Input Images Flow: ***
+   ------------------------------------
+
+    {imageVolumeFileNames} -> [reader] -> {typewiseEqualizedToFirstImage} -> [StandardizedMaskIntensity]
+              -> {currImage} --->   [DenoiseFiltering]  --->   {denoisedImage}
+                      |                                               |
+                      ~                                               ~
+ push_back to:{intraSubjectRawImageMap}     push_back to:{intraSubjectNoiseRemovedImageMap} => <atlasreg>:{IntraSubjOriginalImageList}
+                        |                                                       |
+                        ~                                                       ~
+     [ResampleInPlaceImageList] <--  <atlasreg>:{intraSubjTransforms} --> [ResampleInPlaceImageList]
+                        |                                                       |
+                        ~                                                       ~
+  {intraSubjectRegisteredRawImageMap}  <->  [RescaleFunctionLocal]  <->  {intraSubjectRegisteredImageMap}
+                        |                                                       |
+                        ~                                                       ~
+            set to <segfilter>:{RawInputImages}                     set to <segfilter>:{InputImages}
+
+   - Notations:
+   * class: <>
+   * functional unit: []
+   * file: {}
+   ------------------------------------
+   */
+
+  ////////////////////////////////////
   // Start the segmentation process.
+  ///////////////////////////////////
+  bool usePurePlugs = false;
+  if( purePlugsThreshold > 0 )
+    {
+    usePurePlugs = true;
+    }
+
   for( unsigned int segmentationLevel = 0; segmentationLevel < 1; segmentationLevel++ )
     {
     SegFilterType::Pointer segfilter = SegFilterType::New();
     segfilter->SetUseKNN(useKNN);
-    // __MAX__PROBS
+
+    segfilter->SetUsePurePlugs(usePurePlugs);
+    segfilter->SetPurePlugsThreshold(purePlugsThreshold);
+    segfilter->SetNumberOfSubSamplesInEachPlugArea(
+      numberOfSubSamplesInEachPlugArea[0],
+      numberOfSubSamplesInEachPlugArea[1],
+      numberOfSubSamplesInEachPlugArea[2]);
 
     std::vector<FloatImagePointer> atlasOriginalPriors( PriorNames.size() );
     unsigned int                   AirIndex = 10000;
@@ -1157,14 +1072,14 @@ int main(int argc, char * *argv)
     segfilter->SetPriors(atlasOriginalPriors);
 
     SegFilterType::RangeDBType myRanges;
-    for( unsigned int q = 0; q < PriorNames.size(); q++ )
+    for(auto & PriorName : PriorNames)
       {
-      std::map<std::string, AtlasDefinition::BoundsType> temp_range_List;
-      for( unsigned int tt = 0; tt < input_VolumeTypes.size(); tt++ )
+      orderedmap<std::string, AtlasDefinition::BoundsType> temp_range_List;
+      for(auto & input_VolumeType : input_VolumeTypes)
         {
-        temp_range_List[input_VolumeTypes[tt]] = atlasDefinitionParser.GetBounds(PriorNames[q], input_VolumeTypes[tt]);
+        temp_range_List[input_VolumeType] = atlasDefinitionParser.GetBounds(PriorName, input_VolumeType);
         }
-      myRanges[PriorNames[q]] = temp_range_List;
+      myRanges[PriorName] = temp_range_List;
       }
     segfilter->SetTissueTypeThresholdMapsRange(myRanges);
     segfilter->SetPriorNames(PriorNames);
@@ -1199,7 +1114,16 @@ int main(int argc, char * *argv)
 
     if( !atlasWarpingOff )
       {
-      segfilter->UpdateTransformationOn();
+      // If the final transform filename exists, it will be read in and will be used directly,
+      // so no update is run during iterations.
+      if( atlasToSubjectTransform != "" && itksys::SystemTools::FileExists( atlasToSubjectTransform.c_str() ) )
+        {
+        segfilter->UpdateTransformationOff();
+        }
+      else
+        {
+        segfilter->UpdateTransformationOn();
+        }
       }
     else
       {
@@ -1251,8 +1175,8 @@ int main(int argc, char * *argv)
           {
           // typedef itk::RescaleIntensityImageFilter<FloatImageType,
           // ShortImageType> ShortRescaleType;
-          typedef itk::CastImageFilter<FloatImageType, ShortImageType> CasterType;
-          CasterType::Pointer caster = CasterType::New();
+          typedef itk::CastImageFilter<FloatImageType, ShortImageType> RescaleType;
+          RescaleType::Pointer caster = RescaleType::New();
 
           caster->SetInput(mapIt->second[i]);
           caster->Update();
@@ -1273,10 +1197,9 @@ int main(int argc, char * *argv)
 
     AtlasRegType::MapOfFloatImageVectors imgset = segfilter->GetRawCorrected();
     // Average together all the input images of a given type
-    for(AtlasRegType::MapOfFloatImageVectors::iterator mapIt = imgset.begin();
-        mapIt != imgset.end(); ++mapIt)
+    for(auto & elem : imgset)
       {
-      std::string volumeType = mapIt->first;
+      std::string volumeType = elem.first;
       // Can't average images of type other since it's really a mix of types.
       std::transform(volumeType.begin(), volumeType.end(), volumeType.begin(), tolower);
       if( volumeType == "other" )
@@ -1284,13 +1207,14 @@ int main(int argc, char * *argv)
         continue;
         }
 
-      FloatImagePointer avgImage = AverageImageList<FloatImageType>(mapIt->second);
+      FloatImagePointer avgImage = AverageImageList<FloatImageType>(elem.second);
       // Write out average image.
-      typedef itk::CastImageFilter<FloatImageType, ShortImageType> CasterType;
-      CasterType::Pointer caster = CasterType::New();
-
-      caster->SetInput(avgImage);
-      caster->Update();
+      typedef itk::RescaleIntensityImageFilter<FloatImageType, ShortImageType> RescaleType;
+      RescaleType::Pointer rescaleInstensityFilter = RescaleType::New();
+      rescaleInstensityFilter->SetOutputMinimum(0);
+      rescaleInstensityFilter->SetOutputMaximum(4096);
+      rescaleInstensityFilter->SetInput(avgImage);
+      rescaleInstensityFilter->Update();
 
       std::string avgFileName = outputDir + volumeType + std::string("_average") + suffstr;
 
@@ -1299,7 +1223,7 @@ int main(int argc, char * *argv)
       typedef itk::ImageFileWriter<ShortImageType> ShortWriterType;
       ShortWriterType::Pointer writer = ShortWriterType::New();
 
-      writer->SetInput( caster->GetOutput() );
+      writer->SetInput( rescaleInstensityFilter->GetOutput() );
       writer->SetFileName(avgFileName);
       writer->UseCompressionOn();
       writer->Update();
@@ -1309,10 +1233,9 @@ int main(int argc, char * *argv)
     if( !atlasWarpingOff )
       {
       SegFilterType::MapOfInputImageVectors WarpedAtlasList = segfilter->GenerateWarpedAtlasImages();
-      for(SegFilterType::MapOfInputImageVectors::iterator mapIt = WarpedAtlasList.begin();
-          mapIt != WarpedAtlasList.end(); ++mapIt)
+      for(auto & elem : WarpedAtlasList)
         {
-        for( unsigned int index = 0; index < mapIt->second.size(); index++ )
+        for( unsigned int index = 0; index < elem.second.size(); index++ )
           {
           typedef itk::RescaleIntensityImageFilter<FloatImageType, ByteImageType>
             ByteRescaleType;
@@ -1320,15 +1243,15 @@ int main(int argc, char * *argv)
           ByteRescaleType::Pointer rescaler = ByteRescaleType::New();
           rescaler->SetOutputMinimum(0);
           rescaler->SetOutputMaximum(255);
-          rescaler->SetInput(mapIt->second[index]);
+          rescaler->SetInput(elem.second[index]);
           rescaler->Update();
 
           typedef itk::ImageFileWriter<ByteImageType> ByteWriterType;
           ByteWriterType::Pointer writer = ByteWriterType::New();
 
           const std::string fn = outputDir
-            + GetStrippedImageFileNameExtension(templateVolumes[mapIt->first][index]) + std::string("_to_")
-            + GetStrippedImageFileNameExtension( ( inputVolumeMap[mapIt->first][index] ) )
+            + GetStrippedImageFileNameExtension(templateVolumes[elem.first][index]) + std::string("_to_")
+            + GetStrippedImageFileNameExtension( ( inputVolumeMap[elem.first][index] ) )
             + std::string("_warped") + std::string(".nii.gz");
 
           muLogMacro(<< "Writing warped template images... " << fn << std::endl );
@@ -1338,15 +1261,12 @@ int main(int argc, char * *argv)
           writer->Update();
           }
         }
-      if( atlasToSubjectTransform != "" )
+
+      // If this final transform filename exists, it has been used directly
+      // with no pre-segmentation registration and no updating during iterations,
+      // so there is no need to overwrite that.
+      if( atlasToSubjectTransform != "" && !itksys::SystemTools::FileExists( atlasToSubjectTransform.c_str() ) )
         {
-        /* HACK Remove this completely
-      const std::string postSegmentationTransformFileName = outputDir
-        + GetStrippedImageFileNameExtension(templateVolumes[0])
-        + std::string("_to_")
-        + GetStrippedImageFileNameExtension( ( inputVolumes[0] ) )
-        + std::string("_") + defaultSuffix + "_PostSegmentation.h5";
-        */
         const std::string postSegmentationTransformFileName = atlasToSubjectTransform;
         // NOTE:  Aliasing of smart-pointers up the polymorphic tree OK here
         // because
@@ -1356,9 +1276,6 @@ int main(int argc, char * *argv)
         GenericTransformType::Pointer atlasToSubjectPostSegmentationTransform =
           segfilter->GetTemplateGenericTransform();
         itk::WriteTransformToDisk<double,float>(atlasToSubjectPostSegmentationTransform, postSegmentationTransformFileName);
-        // TODO:  Need to write a short circuit so that if this final transform
-        // filename exists, it will just read it in and use it directly
-        // without doing all the iterations.
         }
       }
 

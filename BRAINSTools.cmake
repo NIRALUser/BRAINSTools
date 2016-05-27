@@ -49,7 +49,7 @@ message(STATUS "Building ${PROJECT_NAME} version \"${${PROJECT_NAME}_VERSION}\""
 include(FindITKUtil)
 include(FindVTKUtil)
 # #-----------------------------------------------------------------------------
-# if(BRAINSTools_REQUIRES_VTK)
+# if(${PRIMARY_PROJECT_NAME}_REQUIRES_VTK)
 # #  message("VTK_DIR:${VTK_DIR}")
 #   find_package(VTK REQUIRED)
 #   if(VTK_FOUND)
@@ -66,15 +66,29 @@ include(${GenerateCLP_USE_FILE})
 include(${SlicerExecutionModel_USE_FILE})
 include(${SlicerExecutionModel_CMAKE_DIR}/SEMMacroBuildCLI.cmake)
 
+if(USE_BRAINSABC)
+  find_package(TBB REQUIRED)
+  # set(VTK_SMP_IMPLEMENTATION_LIBRARIES ${TBB_LIBRARY})
+  include_directories(${TBB_INCLUDE_DIRS})
+endif()
+
 if(USE_ANTS)
+  ## Do a little sanity checking
+  if( NOT (EXISTS "${ANTs_SOURCE_DIR}" AND IS_DIRECTORY "${ANTs_SOURCE_DIR}") )
+    message(FATAL_ERROR "ANTs_SOURCE_DIR: '${ANTs_SOURCE_DIR}' does not exists")
+  endif()
   # find ANTS includes
-  message("ANTs_SOURCE_DIR=${ANTs_SOURCE_DIR}")
   include_directories(${BOOST_INCLUDE_DIR})
   include_directories(${ANTs_SOURCE_DIR}/Temporary)
   include_directories(${ANTs_SOURCE_DIR}/Tensor)
   include_directories(${ANTs_SOURCE_DIR}/Utilities)
   include_directories(${ANTs_SOURCE_DIR}/Examples)
   include_directories(${ANTs_SOURCE_DIR}/ImageRegistration)
+
+  if( NOT (EXISTS "${ANTs_LIBRARY_DIR}" AND IS_DIRECTORY "${ANTs_LIBRARY_DIR}") )
+    message(FATAL_ERROR "ANTs_LIBRARY_DIR: '${ANTs_LIBRARY_DIR}' does not exists")
+  endif()
+
   link_directories(${BRAINSTools_LIBRARY_PATH} ${BRAINSTools_CLI_ARCHIVE_OUTPUT_DIRECTORY} ${ANTs_LIBRARY_DIR})
   set(ANTS_LIBS antsUtilities)
 endif()
@@ -90,10 +104,16 @@ endif()
 #-----------------------------------------------------------------------------
 enable_testing()
 include(CTest)
+
+# Note: Projects (e.g. Slicer) integrating BRAINSTools as a subtree that want
+#       to disable BRAINSTools testing while managing their own test suite
+#       also using the option "BUILD_TESTING" can explicitly set the
+#       variable BRAINSTools_DISABLE_TESTING to 1.
+
 #-----------------------------------------------------------------------------
 # CTestCustom
 #-----------------------------------------------------------------------------
-if(BUILD_TESTING AND NOT Slicer_BUILD_BRAINSTOOLS)
+if(BUILD_TESTING AND NOT BRAINSTools_DISABLE_TESTING)
   configure_file(
     CMake/CTestCustom.cmake.in
     ${CMAKE_CURRENT_BINARY_DIR}/CTestCustom.cmake
@@ -156,6 +176,7 @@ set(brains_modulenames
   BRAINSROIAuto
   GTRACT
   ImageCalculator
+  BRAINSCut
   ## Temporarily Removed Need to update OpenCV BRAINSCut
   BRAINSLandmarkInitializer
   BRAINSSnapShotWriter

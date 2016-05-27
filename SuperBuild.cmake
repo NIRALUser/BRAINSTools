@@ -24,7 +24,7 @@ include(CTest)
 #-----------------------------------------------------------------------------
 # CTestCustom
 #-----------------------------------------------------------------------------
-if(BUILD_TESTING AND NOT Slicer_BUILD_BRAINSTOOLS)
+if(BUILD_TESTING AND NOT BRAINSTools_DISABLE_TESTING)
   configure_file(
     CMake/CTestCustom.cmake.in
     ${CMAKE_CURRENT_BINARY_DIR}/CTestCustom.cmake
@@ -64,6 +64,7 @@ find_package(Git REQUIRED)
 if(${LOCAL_PROJECT_NAME}_USE_QT)
 find_package(Qt4 REQUIRED)
 endif()
+
 
 #-----------------------------------------------------------------------------
 # Enable and setup External project global properties
@@ -142,7 +143,10 @@ option(${PROJECT_NAME}_BUILD_DICOM_SUPPORT "Build Dicom Support" ON)
 set(${LOCAL_PROJECT_NAME}_DEPENDENCIES DCMTK ITKv4 SlicerExecutionModel)
 
 list(APPEND ${LOCAL_PROJECT_NAME}_DEPENDENCIES teem)
-list(APPEND ${LOCAL_PROJECT_NAME}_DEPENDENCIES Boost)
+if(USE_TBB) ## Needed for BRAINSABC
+  list(APPEND ${LOCAL_PROJECT_NAME}_DEPENDENCIES TBB)
+endif()
+#list(APPEND ${LOCAL_PROJECT_NAME}_DEPENDENCIES Boost)
 
 if(BUILD_STYLE_UTILS)
   list(APPEND ${LOCAL_PROJECT_NAME}_DEPENDENCIES Cppcheck KWStyle Uncrustify)
@@ -152,13 +156,7 @@ if(USE_BRAINSABC OR USE_BRAINSCut)
   #list(APPEND ${LOCAL_PROJECT_NAME}_DEPENDENCIES qhull)
 endif()
 
-#if(USE_BRAINSABC OR BRAINS_DEBUG_IMAGE_WRITE)
-if(BRAINS_DEBUG_IMAGE_WRITE
-    OR USE_GTRACT
-    OR USE_BRAINSTalairach
-    OR USE_ConvertBetweenFileFormats
-    OR USE_DWIConvert
-    )
+if(${PRIMARY_PROJECT_NAME}_REQUIRES_VTK)
   list(APPEND ${LOCAL_PROJECT_NAME}_DEPENDENCIES VTK)
 endif()
 
@@ -169,7 +167,6 @@ endif()
 if(USE_ANTS)
   list(APPEND ${LOCAL_PROJECT_NAME}_DEPENDENCIES ANTs)
 endif()
-
 
 #-----------------------------------------------------------------------------
 # Common external projects CMake variables
@@ -226,9 +223,6 @@ mark_as_superbuild(
     CMAKE_MODULE_LINKER_FLAGS:STRING
     SITE:STRING
     BUILDNAME:STRING
-    PYTHON_EXECUTABLE:FILEPATH
-    PYTHON_INCLUDE_DIR:PATH
-    PYTHON_LIBRARY:FILEPATH
     ${PROJECT_NAME}_BUILD_DICOM_SUPPORT:BOOL
     SlicerExecutionModel_DIR:PATH
     SlicerExecutionModel_DEFAULT_CLI_RUNTIME_OUTPUT_DIRECTORY:PATH
@@ -237,6 +231,7 @@ mark_as_superbuild(
     SlicerExecutionModel_DEFAULT_CLI_INSTALL_RUNTIME_DESTINATION:PATH
     SlicerExecutionModel_DEFAULT_CLI_INSTALL_LIBRARY_DESTINATION:PATH
     SlicerExecutionModel_DEFAULT_CLI_INSTALL_ARCHIVE_DESTINATION:PATH
+    ${PRIMARY_PROJECT_NAME}_REQUIRES_VTK:BOOL
   ALL_PROJECTS
   )
 
@@ -306,8 +301,6 @@ mark_as_superbuild(
   ${LOCAL_PROJECT_NAME}_CLI_INSTALL_ARCHIVE_DESTINATION:PATH
   ${LOCAL_PROJECT_NAME}_CLI_INSTALL_RUNTIME_DESTINATION:PATH
 
-  ${PYTHON_INSTALL_CMAKE_ARGS}
-
   USE_AutoWorkup:BOOL
   USE_GTRACT:BOOL
   USE_BRAINSFit:BOOL
@@ -338,6 +331,12 @@ mark_as_superbuild(
   INSTALL_RUNTIME_DESTINATION:STRING
   INSTALL_LIBRARY_DESTINATION:STRING
   INSTALL_ARCHIVE_DESTINATION:STRING
+
+  CMAKE_CXX_STANDARD:STRING
+
+  TBB_ROOT:PATH
+  TBB_BUILD_PREFIX:STRING
+  TBB_BUILD_DIR:PATH
 ALL_PROJECTS
 )
 
@@ -379,20 +378,85 @@ ExternalProject_Add(${proj}
   CMAKE_ARGS
     --no-warn-unused-cli    # HACK Only expected variables should be passed down.
   CMAKE_CACHE_ARGS
+    -DCMAKE_CXX_FLAGS:STRING=${CMAKE_CXX_FLAGS}
+    -DCMAKE_C_FLAGS:STRING=${CMAKE_C_FLAGS}
     -DBRAINSTools_MAX_TEST_LEVEL:STRING=${BRAINSTools_MAX_TEST_LEVEL}
+    -DBRAINS_DEBUG_IMAGE_WRITE:BOOL=${BRAINS_DEBUG_IMAGE_WRITE}
+    -DBUILD_STYLE_UTILS:BOOL=${BUILD_STYLE_UTILS}
+    -DBUILD_TESTING:BOOL=${BUILD_TESTING}
+    -DCMAKE_BUILD_TYPE:STRING=${CMAKE_BUILD_TYPE}
+    -DCMAKE_INSTALL_PREFIX:PATH=${CMAKE_INSTALL_PREFIX}
+    -DCMAKE_OSX_ARCHITECTURES:STRING=${CMAKE_OSX_ARCHITECTURES}
+    -DCMAKE_OSX_DEPLOYMENT_TARGET:STRING=${CMAKE_OSX_DEPLOYMENT_TARGET}
+    -DCMAKE_OSX_SYSROOT:STRING=${CMAKE_OSX_SYSROOT}
+    -DEXTERNAL_PROJECT_BUILD_TYPE:STRING=${EXTERNAL_PROJECT_BUILD_TYPE}
+    -DFORCE_EXTERNAL_BUILDS:BOOL=${FORCE_EXTERNAL_BUILDS}
+    -DITK_VERSION_MAJOR:STRING=${ITK_VERSION_MAJOR}
+    -DSuperBuild_BRAINSTools_BUILD_DICOM_SUPPORT:BOOL=${SuperBuild_BRAINSTools_BUILD_DICOM_SUPPORT}
+    -DSuperBuild_BRAINSTools_USE_CTKAPPLAUNCHER:BOOL=${SuperBuild_BRAINSTools_USE_CTKAPPLAUNCHER}
+    -DSuperBuild_BRAINSTools_USE_GIT_PROTOCOL:BOOL=${SuperBuild_BRAINSTools_USE_GIT_PROTOCOL}
+    -DUSE_ANTS:BOOL=${USE_ANTS}
+    -DUSE_AutoWorkup:BOOL=${USE_AutoWorkup}
+    -DUSE_BRAINSABC:BOOL=${USE_BRAINSABC}
+    -DUSE_BRAINSConstellationDetector:BOOL=${USE_BRAINSConstellationDetector}
+    -DUSE_BRAINSContinuousClass:BOOL=${USE_BRAINSContinuousClass}
+    -DUSE_BRAINSCreateLabelMapFromProbabilityMaps:BOOL=${USE_BRAINSCreateLabelMapFromProbabilityMaps}
+    -DUSE_BRAINSCut:BOOL=${USE_BRAINSCut}
+    -DUSE_BRAINSDWICleanup:BOOL=${USE_BRAINSDWICleanup}
+    -DUSE_BRAINSDemonWarp:BOOL=${USE_BRAINSDemonWarp}
+    -DUSE_BRAINSFit:BOOL=${USE_BRAINSFit}
+    -DUSE_BRAINSInitializedControlPoints:BOOL=${USE_BRAINSInitializedControlPoints}
+    -DUSE_BRAINSLabelStats:BOOL=${USE_BRAINSLabelStats}
+    -DUSE_BRAINSLandmarkInitializer:BOOL=${USE_BRAINSLandmarkInitializer}
+    -DUSE_BRAINSMultiModeSegment:BOOL=${USE_BRAINSMultiModeSegment}
+    -DUSE_BRAINSMultiSTAPLE:BOOL=${USE_BRAINSMultiSTAPLE}
+    -DUSE_BRAINSMush:BOOL=${USE_BRAINSMush}
+    -DUSE_BRAINSPosteriorToContinuousClass:BOOL=${USE_BRAINSPosteriorToContinuousClass}
+    -DUSE_BRAINSROIAuto:BOOL=${USE_BRAINSROIAuto}
+    -DUSE_BRAINSResample:BOOL=${USE_BRAINSResample}
+    -DUSE_BRAINSSnapShotWriter:BOOL=${USE_BRAINSSnapShotWriter}
+    -DUSE_BRAINSStripRotation:BOOL=${USE_BRAINSStripRotation}
+    -DUSE_BRAINSSurfaceTools:BOOL=${USE_BRAINSSurfaceTools}
+    -DUSE_BRAINSTalairach:BOOL=${USE_BRAINSTalairach}
+    -DUSE_BRAINSTransformConvert:BOOL=${USE_BRAINSTransformConvert}
+    -DUSE_ConvertBetweenFileFormats:BOOL=${USE_ConvertBetweenFileFormats}
+    -DUSE_DWIConvert:BOOL=${USE_DWIConvert}
+    -DUSE_DebugImageViewer:BOOL=${USE_DebugImageViewer}
+    -DUSE_GTRACT:BOOL=${USE_GTRACT}
+    -DUSE_ICCDEF:BOOL=${USE_ICCDEF}
+    -DUSE_ImageCalculator:BOOL=${USE_ImageCalculator}
+    -DUSE_ReferenceAtlas:BOOL=${USE_ReferenceAtlas}
+    -DUSE_SYSTEM_DCMTK:BOOL=${USE_SYSTEM_DCMTK}
+    -DUSE_SYSTEM_ITK:BOOL=${USE_SYSTEM_ITK}
+    -DUSE_SYSTEM_SlicerExecutionModel:BOOL=${USE_SYSTEM_SlicerExecutionModel}
+    -DUSE_SYSTEM_VTK:BOOL=${USE_SYSTEM_VTK}
+    -DVTK_GIT_REPOSITORY:STRING=${VTK_GIT_REPOSITORY}
     -D${LOCAL_PROJECT_NAME}_SUPERBUILD:BOOL=OFF
     -DANTs_SOURCE_DIR:PATH=${ANTs_SOURCE_DIR}
     -DANTs_LIBRARY_DIR:PATH=${ANTs_LIBRARY_DIR}
     -DBRAINSTools_LIBRARY_PATH:PATH=${CMAKE_LIBRARY_OUTPUT_DIRECTORY}
-#  -DBOOST_INCLUDE_DIR:PATH=${BOOST_INCLUDE_DIR}
+    -DCMAKE_CXX_STANDARD:STRING=${CMAKE_CXX_STANDARD}
+    -DTBB_ROOT:PATH=${TBB_ROOT}
+    -DTBB_BUILD_PREFIX:STRING=${TBB_BUILD_PREFIX}
+    -DTBB_BUILD_DIR:PATH=${TBB_BUILD_DIR}
   INSTALL_COMMAND ""
   )
 
 # This custom external project step forces the build and later
 # steps to run whenever a top level build is done...
+#
+# BUILD_ALWAYS flag is available in CMake 3.1 that allows force build
+# of external projects without this workaround. Remove this workaround
+# and use the CMake flag instead, when BRAINSTools's required minimum CMake
+# version will be at least 3.1.
+#
+if(CMAKE_CONFIGURATION_TYPES)
+  set(BUILD_STAMP_FILE "${CMAKE_CURRENT_BINARY_DIR}/${proj}-prefix/src/${proj}-stamp/${CMAKE_CFG_INTDIR}/${proj}-build")
+else()
+  set(BUILD_STAMP_FILE "${CMAKE_CURRENT_BINARY_DIR}/${proj}-prefix/src/${proj}-stamp/${proj}-build")
+endif()
 ExternalProject_Add_Step(${proj} forcebuild
-  COMMAND ${CMAKE_COMMAND} -E remove
-    ${CMAKE_CURRENT_BINARY_DIR}/${proj}-prefix/src/${proj}-stamp/${proj}-build
+  COMMAND ${CMAKE_COMMAND} -E remove ${BUILD_STAMP_FILE}
   COMMENT "Forcing build step for '${proj}'"
   DEPENDEES build
   ALWAYS 1

@@ -220,7 +220,7 @@ typename OutputImageType::Pointer GenericTransformImage(
   InputImageType const *const OperandImage,
   const itk::ImageBase<InputImageType::ImageDimension> *ReferenceImage,
   // typename DisplacementImageType::Pointer DisplacementField,
-  typename itk::Transform<double, 3, 3>::Pointer genericTransform,
+  typename itk::Transform<double, 3, 3>::ConstPointer genericTransform,
   typename InputImageType::PixelType suggestedDefaultValue, // NOTE:  This is
                                                             // ignored in the
                                                             // case of binary
@@ -289,7 +289,7 @@ typename OutputImageType::Pointer GenericTransformImage(
     const typename InputImageType::SizeType size = PrincipalOperandImage->GetLargestPossibleRegion().GetSize();
     const typename InputImageType::SpacingType spacing = PrincipalOperandImage->GetSpacing();
     double diagonalLength = 0;
-    for( int s = 0; s < InputImageType::ImageDimension; ++s )
+    for( unsigned int s = 0; s < InputImageType::ImageDimension; ++s )
       {
       diagonalLength += size[s] * spacing[s];
       }
@@ -298,14 +298,14 @@ typename OutputImageType::Pointer GenericTransformImage(
     // distance image. This is an easy enough proof of a lower bound on
     // the image min, since it works even if the mask is a single voxel in
     // the image field corner. suggestedDefaultValue=
-    // vcl_sqrt( diagonalLength );
+    // std::sqrt( diagonalLength );
     // In most cases, a heuristic fraction of the diagonal value is an
     // even better lower bound: if the midpoint of the image is inside the
     // mask, 1/2 is a lower bound as well, and the background is unlikely
     // to drive the upper limit of the intensity range when we visualize
     // the intermediate image for debugging.
 
-    suggestedDefaultValue = -vcl_sqrt(diagonalLength) * 0.5;
+    suggestedDefaultValue = -std::sqrt(diagonalLength) * 0.5;
     }
   else // other than if (pixelType == "binary")
     {
@@ -329,10 +329,15 @@ typename OutputImageType::Pointer GenericTransformImage(
 
       VersorRigid3DTransformType::Pointer tempInitializerITKTransform = VersorRigid3DTransformType::New();
 
-      const CompositeTransformType::ConstPointer genericCompositeTransform =
-        dynamic_cast<const CompositeTransformType *>( genericTransform.GetPointer() );
-      if( genericCompositeTransform.IsNotNull() )
+      std::string genericTransformFileType;
+      if ( genericTransform.IsNotNull() )
         {
+        genericTransformFileType = genericTransform->GetNameOfClass();
+        }
+      if ( genericTransformFileType == "CompositeTransform" )
+        {
+        const CompositeTransformType::ConstPointer genericCompositeTransform =
+          static_cast<const CompositeTransformType *>( genericTransform.GetPointer() );
         if( genericCompositeTransform->GetNumberOfTransforms() > 1 )
           {
           std::cout << "Error in type conversion. " << __FILE__ << __LINE__ << std::endl;
@@ -340,32 +345,52 @@ typename OutputImageType::Pointer GenericTransformImage(
           << "but the input composite transform consists of more than one transfrom." << std::endl;
           }
         // extract the included linear rigid transform from the input composite
-        const VersorRigid3DTransformType::ConstPointer tempTransform =
-          dynamic_cast<VersorRigid3DTransformType const *>( genericCompositeTransform->GetNthTransform(0).GetPointer() );
-        if( tempTransform.IsNull() )
+        CompositeTransformType::TransformType::Pointer genericTempTransform =
+            genericCompositeTransform->GetNthTransform(0).GetPointer();
+        std::string genericTempTransformFileType;
+        if ( genericTempTransform.IsNotNull() )
           {
-          std::cout << "Error in type conversion. " << __FILE__ << __LINE__ << std::endl;
-          std::cout << "ResampleInPlace is only allowed with rigid transform type." << std::endl;
+          genericTempTransformFileType = genericTempTransform->GetNameOfClass();
+          }
+        if (genericTempTransformFileType == "ScaleSkewVersor3DTransform" ||
+            genericTempTransformFileType == "ScaleVersor3DTransform" ||
+            genericTempTransformFileType == "Similarity3DTransform" ||
+            genericTempTransformFileType == "VersorRigid3DTransform"
+            )
+          {
+          const VersorRigid3DTransformType::ConstPointer tempTransform =
+            static_cast<const VersorRigid3DTransformType*>( genericTempTransform.GetPointer() );
+          tempInitializerITKTransform->SetFixedParameters( tempTransform->GetFixedParameters() );
+          tempInitializerITKTransform->SetParameters( tempTransform->GetParameters() );
           }
         else
           {
-          tempInitializerITKTransform->SetFixedParameters( tempTransform->GetFixedParameters() );
-          tempInitializerITKTransform->SetParameters( tempTransform->GetParameters() );
+          std::cout << "Error in type conversion. " << __FILE__ << __LINE__ << std::endl;
+          std::cout << "ResampleInPlace is only allowed with rigid transform type." << std::endl;
           }
         }
       else
         {
-        const VersorRigid3DTransformType::ConstPointer tempTransform =
-          dynamic_cast<VersorRigid3DTransformType const *>( genericTransform.GetPointer() );
-        if( tempTransform.IsNull() )
+        std::string genericTempTransformFileType;
+        if ( genericTransform.IsNotNull() )
           {
-          std::cout << "Error in type conversion. " << __FILE__ << __LINE__ << std::endl;
-          std::cout << "ResampleInPlace is only allowed with rigid transform type." << std::endl;
+          genericTempTransformFileType = genericTransform->GetNameOfClass();
+          }
+        if (genericTempTransformFileType == "ScaleSkewVersor3DTransform" ||
+            genericTempTransformFileType == "ScaleVersor3DTransform" ||
+            genericTempTransformFileType == "Similarity3DTransform" ||
+            genericTempTransformFileType == "VersorRigid3DTransform"
+            )
+          {
+          const VersorRigid3DTransformType::ConstPointer tempTransform =
+            static_cast<VersorRigid3DTransformType const *>( genericTransform.GetPointer() );
+          tempInitializerITKTransform->SetFixedParameters( tempTransform->GetFixedParameters() );
+          tempInitializerITKTransform->SetParameters( tempTransform->GetParameters() );
           }
         else
           {
-          tempInitializerITKTransform->SetFixedParameters( tempTransform->GetFixedParameters() );
-          tempInitializerITKTransform->SetParameters( tempTransform->GetParameters() );
+          std::cout << "Error in type conversion. " << __FILE__ << __LINE__ << std::endl;
+          std::cout << "ResampleInPlace is only allowed with rigid transform type." << std::endl;
           }
         }
       if( tempInitializerITKTransform.IsNull() )
@@ -422,7 +447,7 @@ typename OutputImageType::Pointer GenericTransformImage(
     //  std::cerr << "Lower Threshold == " << lowerThreshold << std::endl;
 
     const typename BinaryThresholdFilterType::InputPixelType upperThreshold =
-      vcl_numeric_limits<typename BinaryThresholdFilterType::InputPixelType>::max();
+      std::numeric_limits<typename BinaryThresholdFilterType::InputPixelType>::max();
     finalFilter->SetLowerThreshold(lowerThreshold);
     finalFilter->SetUpperThreshold(upperThreshold);
 

@@ -45,6 +45,7 @@ if(NOT ( DEFINED "USE_SYSTEM_${extProjName}" AND "${USE_SYSTEM_${extProjName}}" 
       -DCMAKE_CXX_FLAGS:STRING=${ep_common_cxx_flags}
       -DCMAKE_C_COMPILER:FILEPATH=${CMAKE_C_COMPILER}
       -DCMAKE_C_FLAGS:STRING=${ep_common_c_flags}
+      -DCMAKE_CXX_STANDARD:STRING=${CMAKE_CXX_STANDARD}
       -DBUILD_EXAMPLES:BOOL=OFF
       -DBUILD_TESTING:BOOL=OFF
       -DBUILD_NEW_PYTHON_SUPPORT:BOOL=OFF
@@ -82,6 +83,13 @@ if(NOT ( DEFINED "USE_SYSTEM_${extProjName}" AND "${USE_SYSTEM_${extProjName}}" 
       -DBUILD_opencv_video:BOOL=OFF
       -DBUILD_opencv_videostab:BOOL=OFF
       -DBUILD_opencv_world:BOOL=OFF
+
+      -DBUILD_opencv_superres:BOOL=OFF
+      -DBUILD_opencv_python2:BOOL=OFF
+      -DBUILD_opencv_videoio:BOOL=OFF
+      -DBUILD_opencv_java:BOOL=OFF
+      -DBUILD_opencv_imgcodec:BOOL=OFF
+
 ## Turn off GPU supports
       -DWITH_CUDA:BOOL=OFF
       -DWITH_CUFFT:BOOL=OFF
@@ -115,7 +123,7 @@ if(NOT ( DEFINED "USE_SYSTEM_${extProjName}" AND "${USE_SYSTEM_${extProjName}}" 
   #set(${proj}_REPOSITORY "${git_protocol}://github.com/Itseez/opencv")
   #set(${proj}_GIT_TAG "2.4.9") # USE THIS FOR UPDATED VERSION
   set(${proj}_REPOSITORY "${git_protocol}://github.com/BRAINSia/opencv.git") # USE THIS FOR UPDATED VERSION
-  set(${proj}_GIT_TAG "20150501_OpenCV") # USE THIS FOR UPDATED VERSION for clang with c++11 support
+  set(${proj}_GIT_TAG 1cd3c6f36467d59028bb8e2d7bd0a92e519db044)  # "20160127
   #set(${proj}_GIT_TAG "20140630_Upstream") # USE THIS FOR UPDATED VERSION for GCC 4.4.7 on RHEL6
   ExternalProject_Add(${proj}
     ${${proj}_EP_ARGS}

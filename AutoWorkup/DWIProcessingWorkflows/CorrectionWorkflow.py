@@ -11,7 +11,9 @@ from nipype.interfaces.base import traits, isdefined, BaseInterface
 from nipype.interfaces.utility import Merge, Split, Function, Rename, IdentityInterface
 import nipype.interfaces.io as nio   # Data i/oS
 import nipype.pipeline.engine as pe  # pypeline engine
-from SEMTools import *
+from nipype.interfaces.semtools import *
+
+from utilities.misc import CommonANTsRegistrationSettings
 
 def CreateCorrectionWorkflow(WFname):
 
@@ -82,9 +84,6 @@ def CreateCorrectionWorkflow(WFname):
         outputVolume = os.path.realpath('IDDC_'+ os.path.basename(inputVolume))
         sitk.WriteImage(inImage, outputVolume)
         return outputVolume
-
-    def pickCompositeTransfromFromList(composite_transform_as_list):
-        return composite_transform_as_list[0]
 
     def RestoreDCFromSavedMatrix(inputVolume, inputDirectionCosine):
         import os
@@ -203,6 +202,7 @@ def CreateCorrectionWorkflow(WFname):
 
     # Step7: Run antsRegistration in one direction
     antsReg_B0ToTransformedT2 = pe.Node(interface=ants.Registration(), name="antsReg_B0ToTransformedT2")
+    antsReg_B0ToTransformedT2.inputs.interpolation = 'Linear'
     antsReg_B0ToTransformedT2.inputs.dimension = 3
     antsReg_B0ToTransformedT2.inputs.transforms = ["SyN"]
     antsReg_B0ToTransformedT2.inputs.transform_parameters = [(0.25, 3.0, 0.0)]
@@ -226,6 +226,7 @@ def CreateCorrectionWorkflow(WFname):
     antsReg_B0ToTransformedT2.inputs.winsorize_lower_quantile = 0.01
     antsReg_B0ToTransformedT2.inputs.winsorize_upper_quantile = 0.99
     antsReg_B0ToTransformedT2.inputs.float = True
+    antsReg_B0ToTransformedT2.inputs.num_threads = -1
     antsReg_B0ToTransformedT2.inputs.args = '--restrict-deformation 0x1x0'
     CorrectionWF.connect(ForceDCtoIDNode, ('outputVolume', pickFromList, 1), antsReg_B0ToTransformedT2, 'fixed_image')
     CorrectionWF.connect(ForceDCtoIDNode, ('outputVolume', pickFromList, 2), antsReg_B0ToTransformedT2, 'fixed_image_mask')
@@ -246,7 +247,7 @@ def CreateCorrectionWorkflow(WFname):
                                     name="gtractResampleDWI_SyN")
     CorrectionWF.connect(DWI_ForceDCtoIDNode,'outputVolume',
                          gtractResampleDWI_SyN,'inputVolume')
-    CorrectionWF.connect(antsReg_B0ToTransformedT2,('composite_transform',pickCompositeTransfromFromList),
+    CorrectionWF.connect(antsReg_B0ToTransformedT2,'composite_transform',
                          gtractResampleDWI_SyN,'warpDWITransform')
     CorrectionWF.connect(ForceDCtoIDNode,('outputVolume', pickFromList, 1),
                          gtractResampleDWI_SyN,'referenceVolume') # fixed image of antsRegistration

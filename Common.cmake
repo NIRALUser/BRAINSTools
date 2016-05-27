@@ -8,11 +8,22 @@ include(ExternalProjectDependency)
 
 include(CMakeDependentOption)
 
+#if(Slicer_BUILD_BRAINSTOOLS OR USE_AutoWorkup OR USE_GTRACT OR USE_BRAINSTalairach OR USE_BRAINSSurfaceTools OR USE_BRAINSConstellationDetector OR USE_BRAINSDemonWarp OR USE_ConvertBetweenFileFormats )
+
+## VTK is not easy to build on all platforms
+if(Slicer_BUILD_BRAINSTOOLS)
+  option(${PRIMARY_PROJECT_NAME}_REQUIRES_VTK "Determine if tools depending on VTK need to be built." ON)
+else()
+  option(${PRIMARY_PROJECT_NAME}_REQUIRES_VTK "Determine if tools depending on VTK need to be built." OFF)
+  # Enable this option to avoid unnecessary re-compilation associated with command line module
+  set(GENERATECLP_USE_MD5 ON)
+endif()
+mark_as_advanced(${PRIMARY_PROJECT_NAME}_REQUIRES_VTK)
+
 option(${LOCAL_PROJECT_NAME}_INSTALL_DEVELOPMENT "Install development support include and libraries for external packages." OFF)
 mark_as_advanced(${LOCAL_PROJECT_NAME}_INSTALL_DEVELOPMENT)
 
-option(${LOCAL_PROJECT_NAME}_USE_QT "Find and use Qt with VTK to build GUI Tools" OFF)
-mark_as_advanced(${LOCAL_PROJECT_NAME}_USE_QT)
+CMAKE_DEPENDENT_OPTION(${LOCAL_PROJECT_NAME}_USE_QT "Find and use Qt with VTK to build GUI Tools" OFF "${PRIMARY_PROJECT_NAME}_REQUIRES_VTK" OFF)
 
 set(USE_ITKv4 ON)
 set(ITK_VERSION_MAJOR 4 CACHE STRING "Choose the expected ITK major version to build BRAINS only version 4 allowed.")
@@ -34,8 +45,10 @@ endif()
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   message(STATUS "Setting build type to 'Release' as none was specified.")
   set(CMAKE_BUILD_TYPE Release CACHE STRING "Choose the type of build." FORCE)
+  set(CTEST_CONFIGURATION_TYPE ${CMAKE_BUILD_TYPE} CACHE STRING "Choose the type of test." FORCE)
   # Set the possible values of build type for cmake-gui
-  set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS "Debug" "Release" "MinSizeRel" "RelWithDebInfo")
+  set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS "Debug" "Release" "RelWithDebInfo")
+  #  set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS "Debug" "Release" "MinSizeRel" "RelWithDebInfo")
 endif()
 
 if(${ITK_VERSION_MAJOR} STREQUAL "3")
@@ -47,69 +60,66 @@ endif()
 #-----------------------------------------------------------------------------
 option(USE_AutoWorkup                     "Build AutoWorkup"                     ON)
 option(USE_ReferenceAtlas                 "Build the Reference Atlas"            ON)
+
+option(USE_ANTS                           "Build ANTS"                           ON)
+
 option(USE_BRAINSFit                      "Build BRAINSFit"                      ON)
+option(USE_BRAINSResample                 "Build BRAINSResample"                 ON)
+option(USE_BRAINSROIAuto                  "Build BRAINSROIAuto"                  ON)
+option(USE_DWIConvert                     "Build DWIConvert"                     ON)
 option(USE_BRAINSLabelStats               "Build BRAINSLabelStats"               ON)
 option(USE_BRAINSStripRotation            "Build BRAINSStripRotation"            ON)
-option(USE_BRAINSROIAuto                  "Build BRAINSROIAuto"                  ON)
-option(USE_BRAINSResample                 "Build BRAINSResample"                 ON)
-option(USE_BRAINSDemonWarp                "Build BRAINSDemonWarp "               ON)
-option(USE_GTRACT                         "Build GTRACT"                         ON)
-option(USE_BRAINSABC                      "Build BRAINSABC"                      ON)
 option(USE_BRAINSTransformConvert         "Build BRAINSTransformConvert"         ON)
-option(USE_BRAINSTalairach                "Build BRAINSTalairach"                ON)
 option(USE_BRAINSConstellationDetector    "Build BRAINSConstellationDetector"    ON)
-option(USE_BRAINSMush                     "Build BRAINSMush"                     ON)
+CMAKE_DEPENDENT_OPTION(USE_BRAINSConstellationDetectorGUI "Build BRAINSConstellationDetectorGUI" OFF "${PRIMARY_PROJECT_NAME}_REQUIRES_VTK" OFF)
 option(USE_BRAINSInitializedControlPoints "Build BRAINSInitializedControlPoints" ON)
-option(USE_BRAINSMultiModeSegment         "Build BRAINSMultiModeSegment"         ON)
-option(USE_BRAINSCut                      "Build BRAINSCut"                      ON)
 option(USE_BRAINSLandmarkInitializer      "Build BRAINSLandmarkInitializer"      ON)
 option(USE_ImageCalculator                "Build ImageCalculator"                ON)
-option(USE_BRAINSSnapShotWriter           "Build BRAINSSnapShotWriter"           ON)
-option(USE_ConvertBetweenFileFormats      "Build ConvertBetweenFileFormats"      OFF)
-option(USE_BRAINSMultiSTAPLE              "Build BRAINSMultiSTAPLE"              ON)
-option(USE_DWIConvert                     "Build DWIConvert"                     ON)
+option(USE_ConvertBetweenFileFormats      "Build ConvertBetweenFileFormats"      ON)
 option(USE_BRAINSDWICleanup               "Build BRAINSDWICleanup"               ON)
 option(USE_BRAINSCreateLabelMapFromProbabilityMaps "Build BRAINSCreateLabelMapFromProbabilityMaps" OFF)
-option(USE_BRAINSMultiSTAPLE              "Build BRAINSMultiSTAPLE" ON)
+option(USE_BRAINSSnapShotWriter           "Build BRAINSSnapShotWriter"           ON)
 
-if( NOT USE_ANTS )
-option(USE_ANTS                           "Build ANTS"                           ON)
+if(CMAKE_CXX_STANDARD LESS 11)
+  option(USE_BRAINSABC                      "Build BRAINSABC"                      OFF)
+else()
+  option(USE_BRAINSABC                      "Build BRAINSABC"                      OFF)
 endif()
+
+
+## These are no longer needed on a day to day basis
+if(NOT BUILD_FOR_DASHBOARD)
+  set(BUILD_FOR_DASHBOARD OFF)
+endif()
+option(USE_BRAINSCut                      "Build BRAINSCut"                      ${BUILD_FOR_DASHBOARD})
+option(USE_BRAINSMultiSTAPLE              "Build BRAINSMultiSTAPLE"              ${BUILD_FOR_DASHBOARD})
+CMAKE_DEPENDENT_OPTION(USE_BRAINSDemonWarp "Build BRAINSDemonWarp " ${BUILD_FOR_DASHBOARD} "${PRIMARY_PROJECT_NAME}_REQUIRES_VTK" OFF)
+CMAKE_DEPENDENT_OPTION(USE_GTRACT "Build GTRACT" ${BUILD_FOR_DASHBOARD} "${PRIMARY_PROJECT_NAME}_REQUIRES_VTK" OFF)
+option(USE_BRAINSMush                     "Build BRAINSMush"                     ${BUILD_FOR_DASHBOARD})
+option(USE_BRAINSMultiModeSegment         "Build BRAINSMultiModeSegment"         ${BUILD_FOR_DASHBOARD})
 
 ## These are not yet ready for prime time.
-option(USE_BRAINSContinuousClass          "Build BRAINSContinuousClass "   OFF)
-option(USE_BRAINSSurfaceTools             "Build BRAINSSurfaceTools     "  ON)
-option(USE_ICCDEF                         "Build ICCDEF     "              OFF)
+CMAKE_DEPENDENT_OPTION(USE_BRAINSTalairach "Build BRAINSTalairach" ${BUILD_FOR_DASHBOARD} "${PRIMARY_PROJECT_NAME}_REQUIRES_VTK" OFF)
+CMAKE_DEPENDENT_OPTION(USE_BRAINSSurfaceTools "Build BRAINSSurfaceTools" ${BUILD_FOR_DASHBOARD} "${PRIMARY_PROJECT_NAME}_REQUIRES_VTK" OFF)
+option(USE_BRAINSContinuousClass          "Build BRAINSContinuousClass"         OFF)
+option(USE_ICCDEF                         "Build ICCDEF     "                    OFF)
 option(USE_BRAINSPosteriorToContinuousClass             "Build BRAINSPosteriorToContinuousClass" OFF)
-
-option(USE_DebugImageViewer "Build DebugImageViewer" OFF)
+CMAKE_DEPENDENT_OPTION(USE_DebugImageViewer "Build DebugImageViewer" OFF "${PRIMARY_PROJECT_NAME}_REQUIRES_VTK" OFF)
 option(BRAINS_DEBUG_IMAGE_WRITE "Enable writing out intermediate image results" OFF)
 
-if(Slicer_BUILD_BRAINSTOOLS OR USE_AutoWorkup OR USE_GTRACT OR USE_BRAINSTalairach OR USE_BRAINSSurfaceTools)
-  set(BRAINSTools_REQUIRES_VTK ON)
+option(USE_TBB "Build TBB as an internal module. This feature is still experimental and unsupported" OFF)
+mark_as_advanced(USE_TBB)
+
+if(NOT ${PRIMARY_PROJECT_NAME}_REQUIRES_VTK)
+  message("NOTE: Following toolkits are dependent to VTK:
+      -GTRACT
+      -BRAINSDemonWarp
+      -BRAINSTalairach
+      -BRAINSSurfaceTools
+      -DebugImageViewer
+      -BRAINSConstellationDetectorGUI
+      First you need to set ${PRIMARY_PROJECT_NAME}_REQUIRES_VTK to ON to be able to choose above application for build.")
 endif()
-
-## NIPYPE is not stable under python 2.6, so require 2.7 when using autoworkup
-## Enthought Canopy or anaconda are convenient ways to install python 2.7 on linux
-## or the other option is the free version of Anaconda from https://store.continuum.io/
-set(REQUIRED_PYTHON_VERSION 2.7)
-# find_package ( PythonInterp REQUIRED )
-# message(STATUS "Found PythonInterp version ${PYTHON_VERSION_STRING}")
-# find_package ( PythonLibs REQUIRED )
-find_package( PythonVirtualenv REQUIRED )
-
-# Check the Python version found
-if( NOT PYTHON_VERSION_MAJOR EQUAL "2" )
-  message( FATAL_ERROR " - Nipype requires Python version == 2" )
-elseif( PYTHON_VERSION_MINOR LESS "7")
-  message( FATAL_ERROR " - Nipype requires Python version > 2.6" )
-endif()
-
-set(PYTHON_INSTALL_CMAKE_ARGS
-      PYTHON_EXECUTABLE:FILEPATH
-      PYTHON_LIBRARY:FILEPATH
-      PYTHON_INCLUDE_DIR:PATH
-   )
 
 if(USE_ICCDEF OR ITK_USE_FFTWD OR ITK_USE_FFTWF)
   set(${PROJECT_NAME}_BUILD_FFTWF_SUPPORT ON)
@@ -117,7 +127,7 @@ endif()
 
 if(${LOCAL_PROJECT_NAME}_USE_QT)
   if(NOT QT4_FOUND)
-    find_package(Qt4 4.6 COMPONENTS QtCore QtGui QtNetwork QtXml REQUIRED)
+    find_package(Qt4 4.8 COMPONENTS QtCore QtGui QtNetwork QtXml REQUIRED)
     include(${QT_USE_FILE})
   endif()
 endif()

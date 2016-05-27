@@ -13,12 +13,6 @@
 ## cmake variable.
 macro(FindITKUtil ITK_VAR_PREFIX )
 
-  if(Slicer_BUILD_BRAINSTOOLS) ## Slicer has it's own internal MGHIO that conflicts with ITK
-    set(BRAINSTOOLS_MGHIO_MODULE_NAME "")
-  else()
-    set(BRAINSTOOLS_MGHIO_MODULE_NAME MGHIO )
-  endif()
-
   # ITK_FOUND needs to be reset, or it won't redo
   # setting up the include directories
   unset(ITK_FIND_COMPONENTS)
@@ -49,23 +43,20 @@ macro(FindITKUtil ITK_VAR_PREFIX )
     ITKIOTIFF
     ITKIOTransformInsightLegacy
     ITKIOVTK
+    ITKIOMRC
     ITKIOSpatialObjects
     ITKIOTransformBase
     ITKIOHDF5
     ITKIOTransformMatlab
     ITKIOTransformHDF5
     ITKIOGE
-    ${BRAINSTOOLS_MGHIO_MODULE_NAME}
+    MGHIO
     # other modules specific to the current directory
     ${ARGN}
     )
   list(REMOVE_DUPLICATES ITK_INCLUSION_MODULES)
-  find_package(ITK 4.5 COMPONENTS ${ITK_INCLUSION_MODULES} REQUIRED)
+  find_package(ITK COMPONENTS ${ITK_INCLUSION_MODULES} REQUIRED)
   #itk_module_config(${ITK_VAR_PREFIX} ${ITK_INCLUSION_MODULES})
-
-  if(Slicer_BUILD_BRAINSTOOLS)
-    set(ITK_NO_IO_FACTORY_REGISTER_MANAGER 1)
-  endif()
 
   include(${ITK_USE_FILE})
   set(${ITK_VAR_PREFIX}_INCLUDE_DIRS ${ITK_INCLUDE_DIRS})

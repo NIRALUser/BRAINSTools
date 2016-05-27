@@ -9,6 +9,9 @@ configure_file( BRAINSABCSmallExtendedAtlasDefinition.xml.in
                 @ONLY IMMEDIATE)
 
 
+#add_executable(TestLinearRegressionTesting TestLinearRegresionInstensityMatching.cxx)
+#target_link_libraries(TestLinearRegressionTesting BRAINSCommonLib )
+
 MakeTestDriverFromSEMTool(BRAINSABC BRAINSABCTest.cxx)
 
 ExternalData_add_test( ${PROJECT_NAME}FetchData NAME BRAINSABCSmallTest
@@ -40,6 +43,7 @@ ExternalData_add_test( ${PROJECT_NAME}FetchData NAME BRAINSABCSmallTest
    --outputVolumes ${CMAKE_CURRENT_BINARY_DIR}/BRAINSABCSmallT1_1.nii.gz
    --outputVolumes ${CMAKE_CURRENT_BINARY_DIR}/BRAINSABCSmallT2_1.nii.gz
    --posteriorTemplate ${CMAKE_CURRENT_BINARY_DIR}/BRAINSABCSmallPOST_%s.nii.gz
+   --purePlugsThreshold 0.2
 )
 
 if( ${BRAINSTools_MAX_TEST_LEVEL} GREATER 5) #These test takes way to long to run all the time

@@ -63,7 +63,9 @@ from nipype.interfaces.utility import Merge, Split, Function, Rename, IdentityIn
 import nipype.interfaces.io as nio   # Data i/oS
 import nipype.pipeline.engine as pe  # pypeline engine
 from nipype.interfaces.freesurfer import ReconAll
-from SEMTools import *
+from nipype.interfaces.semtools import *
+
+from utilities.misc import CommonANTsRegistrationSettings
 
 
 def get_global_sge_script(pythonPathsList, binPathsList, customEnvironment={}):
@@ -222,7 +224,7 @@ MasterDWIWorkflow.config['execution'] = {
     'stop_on_first_rerun': 'false',  # This stops at first attempt to rerun, before running, and before deleting previous results.
     'hash_method': 'timestamp',
     'single_thread_matlab': 'true',  # Multi-core 2011a  multi-core for matrix multiplication.
-    'remove_unnecessary_outputs': 'false',
+    'remove_unnecessary_outputs': 'true', #remove any interface outputs not needed by the workflow
     'use_relative_paths': 'false',  # relative paths should be on, require hash update when changed.
     'remove_node_directories': 'false',  # Experimental
     'local_hash_check': 'true',
@@ -258,7 +260,7 @@ import nipype.interfaces.io as nio   # Data i/oS
 import nipype.pipeline.engine as pe  # pypeline engine
 from nipype.interfaces.freesurfer import ReconAll
 
-from SEMTools import BRAINSFit,gtractResampleDWIInPlace,dtiestim,dtiprocess
+from nipype.interfaces.semtools import BRAINSFit,gtractResampleDWIInPlace,dtiestim,dtiprocess
 
 inputsSpec = pe.Node(interface=IdentityInterface(fields=['SESSION_TUPLE']), name='inputspec')
 inputsSpec.iterables = ('SESSION_TUPLE',SESSION_TUPLE)
@@ -394,7 +396,7 @@ MasterDWIWorkflow.connect(DTIProcess, 'lambda2_output', outputsSpec, 'Lambda2Ima
 MasterDWIWorkflow.connect(DTIProcess, 'lambda3_output', outputsSpec, 'Lambda3Image')
 
 ## UKF Processing
-from SEMTools import UKFTractography
+from nipype.interfaces.semtools import UKFTractography
 UKFNode = pe.Node(interface=UKFTractography(), name= "UKFRunRecordStates")
 UKFNode.inputs.tracts = "ukfTrackts.vtk"
 UKFNode.inputs.tractsWithSecondTensor = "ukfSecondTensorTracks.vtk"

@@ -28,8 +28,6 @@ findITKUtil( BRAINSDemonWarp
   ITKTestKernel
 )
 
-FindVTKUtil(vtkRenderingFreeType)
-
 #-----------------------------------------------------------------------------
 # Output directories.
 #
@@ -86,6 +84,6 @@ foreach(prog ${ALL_PROGS_LIST})
 endforeach()
 
 ### Add the Testing Subdirectory.
-if(BUILD_TESTING AND NOT Slicer_BUILD_BRAINSTOOLS)
+if(BUILD_TESTING AND NOT BRAINSTools_DISABLE_TESTING)
   add_subdirectory(TestSuite)
 endif()

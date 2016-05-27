@@ -1,4 +1,6 @@
 
+
+
 include_directories(
   ${BRAINSTools_SOURCE_DIR}/BRAINSABC/brainseg
   ${BRAINSTools_SOURCE_DIR}/BRAINSABC/common
@@ -25,10 +27,19 @@ set(BRAINSABCCOMMONLIB_SRCS
 ## Build BRAINSABCCOMMONLIB library
 ##
 add_library(BRAINSABCCOMMONLIB STATIC ${BRAINSABCCOMMONLIB_SRCS})
-add_dependencies(BRAINSABCCOMMONLIB InstallReferenceAtlas)
+add_dependencies(BRAINSABCCOMMONLIB InstallReferenceAtlas )
+set_property(TARGET BRAINSABCCOMMONLIB PROPERTY CXX_STANDARD 11)
+set_property(TARGET BRAINSABCCOMMONLIB PROPERTY CXX_STANDARD_REQUIRED ON)
+
+set(BABC_CXX11_Required_Features
+      cxx_lambdas
+      cxx_strong_enums
+      cxx_constexpr
+      cxx_auto_type)
+target_compile_features(BRAINSABCCOMMONLIB PRIVATE ${BABC_CXX11_Required_Features})
 
 
-set(BRAINSABCCOMMONLIBLibraries BRAINSCommonLib ${BRAINSABC_ITK_LIBRARIES})
+set(BRAINSABCCOMMONLIBLibraries BRAINSCommonLib ${BRAINSABC_ITK_LIBRARIES} ${TBB_LIBRARY})
 
 DebugImageViewerLibAdditions(BRAINSABCCOMMONLIBLibraries)
 
@@ -52,6 +63,7 @@ set(ALL_PROGS_LIST
   BRAINSABC
   ESLR
   GenerateLabelMapFromProbabilityMap
+  GeneratePurePlugMask
   )
 foreach( prog ${ALL_PROGS_LIST} )
   StandardBRAINSBuildMacro( NAME ${prog}

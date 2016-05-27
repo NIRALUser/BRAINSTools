@@ -30,7 +30,8 @@
 
 typedef std::map<size_t,size_t> LabelCountMapType;
 typedef itk::Image<unsigned char, 3>       ByteImageType;
-extern LabelCountMapType GetMinLabelCount(ByteImageType::Pointer & labelsImage);
+extern LabelCountMapType GetMinLabelCount(ByteImageType::Pointer & labelsImage,
+                                          const vnl_vector<unsigned int> & PriorLabelCodeVector);
 // Labeling using maximum a posteriori, also do brain stripping using
 // mathematical morphology and connected component
 template <class TProbabilityImage, class TByteImage,
@@ -45,6 +46,8 @@ void ComputeLabels(
   TFloatingPrecision InclusionThreshold,  //No thresholding = 0.0F
   const size_t minLabelSizeAllowed) //Allow zero sized labels = 0
 {
+  std::cout << "\nComputing labels..." << std::endl;
+
   std::map<size_t,size_t> reverseLabelMap;
   for( size_t i=0; i < PriorLabelCodeVector.size(); ++i)
     {
@@ -76,17 +79,9 @@ void ComputeLabels(
       }
     DirtyLabels->FillBuffer(0);
     foregroundMask->FillBuffer(0);
-#if defined(LOCAL_USE_OPEN_MP) && (_OPENMP < 200805)
-    typedef int LocalLOOPITERTYPE;
-#else
     typedef unsigned int LocalLOOPITERTYPE;
-#endif
-
     const typename TByteImage::SizeType size = DirtyLabels->GetLargestPossibleRegion().GetSize();
       {
-#if defined(LOCAL_USE_OPEN_MP)
-#pragma omp parallel for
-#endif
       for( LocalLOOPITERTYPE kk = 0; kk < (LocalLOOPITERTYPE)size[2]; kk++ )
         {
         for( LocalLOOPITERTYPE jj = 0; jj < (LocalLOOPITERTYPE)size[1]; jj++ )
@@ -139,7 +134,7 @@ void ComputeLabels(
         }
       }
     //
-    LabelCountMapType currentLabelsMapCounts = GetMinLabelCount( DirtyLabels );
+    LabelCountMapType currentLabelsMapCounts = GetMinLabelCount( DirtyLabels, PriorLabelCodeVector );
     currentMinLabelSize = currentLabelsMapCounts.begin()->second;
     for( typename LabelCountMapType::const_iterator it = currentLabelsMapCounts.begin();
           it != currentLabelsMapCounts.end(); ++it)

@@ -1,3 +1,4 @@
+from __future__ import print_function
 ## \author Hans J. Johnson
 ## This file contains the code necessary to build the python module
 ## nodes for SEM compliant tools
@@ -5,11 +6,11 @@
 
 ## NOTES ON HOW TO RUN THIS.
 # build with all options turned on (even the non-default options)
-print "export BLD_DIR=/Users/johnsonhj/src/NEP-11"
-print "export BRAINS_SRC=${BLD_DIR}/BRAINSTools"
-print "cd ${BRAINS_SRC}/AutoWorkup; rm -rf ${BRAINS_SRC}/AutoWorkup/SEMTools;"
-print "python local_generate_classes.py --python_paths=${BLD_DIR}/NIPYPE --program_paths=${BLD_DIR}/bin:${PATH} --output_path=${PWD}"
-print """for i in $(find ${BRAINS_SRC}/AutoWorkup/SEMTools  -name "*.py"); do  autopep8 --max-line-length=300 -i ${i}; done"""
+print("export BLD_DIR=/Users/johnsonhj/src/NEP-11")
+print("export BRAINS_SRC=${BLD_DIR}/BRAINSTools")
+print("cd ${BRAINS_SRC}/AutoWorkup; rm -rf ${BRAINS_SRC}/AutoWorkup/semtools;")
+print("python local_generate_classes.py --python_paths=${BLD_DIR}/NIPYPE --program_paths=${BLD_DIR}/bin:${PATH} --output_path=${PWD}")
+print("""for i in $(find ${BRAINS_SRC}/AutoWorkup/semtools  -name "*.py"); do  autopep8 --max-line-length=300 -i ${i}; done""")
 
 
 all_known_modules_list = [
@@ -133,12 +134,12 @@ import os
 import shutil
 import argparse
 
-print "Running: ",' '.join(sys.argv), "\n\n"
+print("Running: ",' '.join(sys.argv), "\n\n")
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--python_paths", dest='python_paths', type=str, help="usually just the path the nipype")
 parser.add_argument("--program_paths",dest='program_paths',type=str, help="where to find the sem programs")
-parser.add_argument("--output_path",  dest='output_path',  type=str, help="the location where the SEMTools directory will be generated")
+parser.add_argument("--output_path",  dest='output_path',  type=str, help="the location where the semtools directory will be generated")
 
 args = parser.parse_args()
 
@@ -160,7 +161,7 @@ os.environ['PATH'] = ':'.join(PROGRAM_PATHS)
 
 SEARCH_PATHS=args.program_paths.split(':')
 
-OUTPUT_PATH = os.path.join(args.output_path,'SEMTools')
+OUTPUT_PATH = os.path.join(args.output_path,'semtools')
 if os.path.exists(OUTPUT_PATH):
     shutil.rmtree(OUTPUT_PATH)
 os.mkdir(OUTPUT_PATH)
@@ -185,8 +186,8 @@ help_file = open(os.path.join(OUTPUT_PATH,'generated.sh'),'w')
 help_file.write(' '.join(sys.argv)+"\n")
 help_file.close()
 
-print "\n\nRan: ",' '.join(sys.argv),"\n\n"
+print("\n\nRan: ",' '.join(sys.argv),"\n\n")
 
-print "FOUND: ", found_modules_list
+print("FOUND: ", found_modules_list)
 for test_module in missing_modules_list:
   print("Missing Candidate Program: {prog_name}".format(prog_name=test_module))

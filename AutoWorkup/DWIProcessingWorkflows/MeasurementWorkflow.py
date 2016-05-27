@@ -1,3 +1,5 @@
+from __future__ import division
+from past.utils import old_div
 ## \author Ali Ghayoor
 ##
 ## This workflow computes the statistics of RISs over regions of interest from the input label map.
@@ -12,7 +14,8 @@ from nipype.interfaces.base import traits, isdefined, BaseInterface
 from nipype.interfaces.utility import Merge, Split, Function, Rename, IdentityInterface
 import nipype.interfaces.io as nio   # Data i/oS
 import nipype.pipeline.engine as pe  # pypeline engine
-from SEMTools import *
+from nipype.interfaces.semtools import *
+from functools import reduce
 
 def CreateMeasurementWorkflow(WFname, LABELS_CONFIG_FILE):
     #\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/
@@ -76,6 +79,7 @@ def CreateMeasurementWorkflow(WFname, LABELS_CONFIG_FILE):
             return reduce(operator.mul, inputVolume.GetSpacing())
 
         def ReturnStatisticsList(labelID,voxelVolume,resampledRISVolume,DWILabelMap,T2LabelMap):
+            from past.utils import old_div
             statFilter = sitk.LabelStatisticsImageFilter()
             # RIS stats over input label ID
             statFilter.Execute(resampledRISVolume, DWILabelMap)
@@ -97,7 +101,7 @@ def CreateMeasurementWorkflow(WFname, LABELS_CONFIG_FILE):
             else:
                 if totalVolume == 0:
                    raise ValueError('Label {0} is not found in T2 labels map, but exists in DWI labels map!'.format(labelID))
-                confidence_coeficient=effectiveVolume/totalVolume
+                confidence_coeficient=old_div(effectiveVolume,totalVolume)
             # Now create statistics list
             statsList = [format(mean,'.4f'),
                          format(std,'.4f'),
@@ -207,7 +211,7 @@ def CreateMeasurementWorkflow(WFname, LABELS_CONFIG_FILE):
     #                  and is used to compute all stats like [mean,std,max,min,median,effective_volume].
 
     # Step2: Resample each RIS to T2LabelmapVolume voxel lattice
-    MakeResamplerInFilesListNode = pe.Node(Function(function=MakeResamplerInFileList,
+    MakeResamplerInFilesListNode = pe.Node(interface=Function(function=MakeResamplerInFileList,
                                                     input_names=['FAImage','MDImage','RDImage','FrobeniusNormImage',
                                                                  'Lambda1Image','Lambda2Image','Lambda3Image'],
                                                     output_names=['RISsList']),

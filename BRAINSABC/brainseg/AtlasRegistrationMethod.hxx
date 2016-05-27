@@ -45,7 +45,6 @@
 
 itk::Transform<double, 3, 3>::Pointer MakeRigidIdentity(void)
 {
-  typedef itk::Transform<double, 3, 3> GenericTransformType;
   // Also append identity matrix for each image
   itk::VersorRigid3DTransform<double>::Pointer rigidIdentity = itk::VersorRigid3DTransform<double>::New();
 
@@ -142,11 +141,10 @@ void
 AtlasRegistrationMethod<TOutputPixel, TProbabilityPixel>
 ::RegisterIntraSubjectImages()
 {
-
   muLogMacro(<< "Register Intra subject images" << std::endl);
 
   int i = 0;
-  for(MapOfFloatImageVectors::iterator mapOfModalImageListsIt = this->m_IntraSubjectOriginalImageList.begin();
+  for(auto mapOfModalImageListsIt = this->m_IntraSubjectOriginalImageList.begin();
       mapOfModalImageListsIt != this->m_IntraSubjectOriginalImageList.end();
       ++mapOfModalImageListsIt)
     {
@@ -180,7 +178,7 @@ AtlasRegistrationMethod<TOutputPixel, TProbabilityPixel>
         muLogMacro(<< "Key image registered to itself with Identity transform." << std::endl);
         m_IntraSubjectTransforms[mapOfModalImageListsIt->first].push_back(MakeRigidIdentity());
         }
-      else
+      else // when m_ImageLinearTransformChoice == "Rigid"
         {
         typedef itk::BRAINSFitHelper HelperType;
         HelperType::Pointer intraSubjectRegistrationHelper = HelperType::New();
@@ -200,14 +198,16 @@ AtlasRegistrationMethod<TOutputPixel, TProbabilityPixel>
         intraSubjectRegistrationHelper->SetFixedVolume(this->GetModifiableKeySubjectImage() );
         // TODO: Find way to turn on histogram equalization for same mode images
         const int dilateSize = 15;
+        const int closingSize = 15;
         intraSubjectRegistrationHelper->SetMovingVolume((*intraImIt).GetPointer());
         muLogMacro( << "Generating MovingImage Mask (Intrasubject  " << i << ")" <<  std::endl );
         typedef itk::BRAINSROIAutoImageFilter<InternalImageType, itk::Image<unsigned char, 3> > ROIAutoType;
         typename ROIAutoType::Pointer  ROIFilter = ROIAutoType::New();
         ROIFilter->SetInput((*intraImIt));
+        ROIFilter->SetClosingSize(closingSize);
         ROIFilter->SetDilateSize(dilateSize); // Only use a very small non-tissue
-        // region outside of head during initial
-        // runnings
+                                              // region outside of head during initial
+                                              // runnings
         ROIFilter->Update();
         ByteImageType::Pointer movingMaskImage = ROIFilter->GetOutput();
         intraSubjectRegistrationHelper->SetMovingBinaryVolume(ROIFilter->GetSpatialObjectROI() );
@@ -234,9 +234,10 @@ AtlasRegistrationMethod<TOutputPixel, TProbabilityPixel>
           typedef itk::BRAINSROIAutoImageFilter<InternalImageType, itk::Image<unsigned char, 3> > LocalROIAutoType;
           ROIFilter = LocalROIAutoType::New();
           ROIFilter->SetInput(this->GetModifiableKeySubjectImage());
+          ROIFilter->SetClosingSize(closingSize);
           ROIFilter->SetDilateSize(dilateSize); // Only use a very small non-tissue
-          // region outside of head during
-          // initial runnings
+                                                // region outside of head during
+                                                // initial runnings
           ROIFilter->Update();
           m_InputImageTissueRegion = ROIFilter->GetOutput();
           m_InputSpatialObjectTissueRegion = ROIFilter->GetSpatialObjectROI();
@@ -257,75 +258,22 @@ AtlasRegistrationMethod<TOutputPixel, TProbabilityPixel>
             }
           }
         intraSubjectRegistrationHelper->SetFixedBinaryVolume(m_InputSpatialObjectTissueRegion);
-        if( m_ImageLinearTransformChoice == "Rigid" )
-          {
-          muLogMacro(<< "Registering (Rigid) image " << i << " to first image." << std::endl);
-          std::vector<double> minimumStepSize(1);
-          minimumStepSize[0] = 0.00005;
-          intraSubjectRegistrationHelper->SetMinimumStepLength(minimumStepSize);
-          std::vector<std::string> transformType(1);
-          transformType[0] = "Rigid";
-          intraSubjectRegistrationHelper->SetTransformType(transformType);
-          }
-        else if( m_ImageLinearTransformChoice == "Affine" )
-          {
-          muLogMacro(<< "Registering (Affine) image " << i << " to first image." << std::endl);
-          std::vector<double> minimumStepSize(4);
-          minimumStepSize[0] = 0.00005;
-          minimumStepSize[1] = 0.005;
-          minimumStepSize[2] = 0.005;
-          minimumStepSize[3] = 0.005;
-          intraSubjectRegistrationHelper->SetMinimumStepLength(minimumStepSize);
-          std::vector<std::string> transformType(4);
-          transformType[0] = "Rigid";
-          transformType[1] = "ScaleVersor3D";
-          transformType[2] = "ScaleSkewVersor3D";
-          transformType[3] = "Affine";
-          intraSubjectRegistrationHelper->SetTransformType(transformType);
-          }
-        else if( m_ImageLinearTransformChoice == "BSpline" )
-          {
-          muLogMacro(<< "Registering (BSpline) image " << i << " to first subject image." << std::endl);
-          std::vector<double> minimumStepSize(5);
-          minimumStepSize[0] = 0.00005;
-          minimumStepSize[1] = 0.005;
-          minimumStepSize[2] = 0.005;
-          minimumStepSize[3] = 0.005;
-          minimumStepSize[4] = 0.005;
-          intraSubjectRegistrationHelper->SetMinimumStepLength(minimumStepSize);
-          std::vector<std::string> transformType(5);
-          transformType[0] = "Rigid";
-          transformType[1] = "ScaleVersor3D";
-          transformType[2] = "ScaleSkewVersor3D";
-          transformType[3] = "Affine";
-          transformType[4] = "BSpline";
-          intraSubjectRegistrationHelper->SetTransformType(transformType);
-          std::vector<int> splineGridSize(3);
-          splineGridSize[0] = this->m_WarpGrid[0];
-          splineGridSize[1] = this->m_WarpGrid[1];
-          splineGridSize[2] = this->m_WarpGrid[2];
-          intraSubjectRegistrationHelper->SetSplineGridSize(splineGridSize);
-          // Setting max displace
-          intraSubjectRegistrationHelper->SetMaxBSplineDisplacement(6.0);
-          }
-        else if( m_ImageLinearTransformChoice == "SyN" )
-          {
-          muLogMacro(<< "Registering (SyN) image " << i << " to first subject image." << std::endl);
-          std::vector<double> minimumStepSize(5);
-          minimumStepSize[0] = 0.00005;
-          minimumStepSize[1] = 0.005;
-          minimumStepSize[2] = 0.005;
-          minimumStepSize[3] = 0.005;
-          minimumStepSize[4] = 0.000005;
-          intraSubjectRegistrationHelper->SetMinimumStepLength(minimumStepSize);
-          std::vector<std::string> transformType(5);
-          transformType[0] = "Rigid";
-          transformType[1] = "ScaleVersor3D";
-          transformType[2] = "ScaleSkewVersor3D";
-          transformType[3] = "Affine";
-          transformType[4] = "SyN";
-          intraSubjectRegistrationHelper->SetTransformType(transformType);
-          }
+
+        muLogMacro(<< "Registering (Rigid) image " << i << " to first image." << std::endl);
+        // For better registration, several linear registration methods are run,
+        // but at the end, rigid component is extracted from output linear transform.
+        std::vector<double> minimumStepSize(4);
+        minimumStepSize[0] = 0.00005;
+        minimumStepSize[1] = 0.005;
+        minimumStepSize[2] = 0.005;
+        minimumStepSize[3] = 0.005;
+        intraSubjectRegistrationHelper->SetMinimumStepLength(minimumStepSize);
+        std::vector<std::string> transformType(4);
+        transformType[0] = "Rigid";
+        transformType[1] = "ScaleVersor3D";
+        transformType[2] = "ScaleSkewVersor3D";
+        transformType[3] = "Affine";
+        intraSubjectRegistrationHelper->SetTransformType(transformType);
         //
         // intraSubjectRegistrationHelper->SetBackgroundFillValue(backgroundFillValue);
         // NOT VALID When using initializeTransformMode
@@ -348,8 +296,9 @@ AtlasRegistrationMethod<TOutputPixel, TProbabilityPixel>
         intraSubjectRegistrationHelper->Update();
         const unsigned int actualIterations = intraSubjectRegistrationHelper->GetActualNumberOfIterations();
         muLogMacro( << "Registration tool " << actualIterations << " iterations." << std::endl );
-        GenericTransformType::Pointer p =
-          intraSubjectRegistrationHelper->GetCurrentGenericTransform()->GetNthTransform(0);
+        itk::VersorRigid3DTransform<double>::Pointer versorRigid = itk::ComputeRigidTransformFromGeneric(
+          intraSubjectRegistrationHelper->GetCurrentGenericTransform()->GetNthTransform(0).GetPointer() );
+        GenericTransformType::Pointer p = versorRigid.GetPointer();
         this->m_IntraSubjectTransforms[mapOfModalImageListsIt->first].push_back(p);
         // Write out intermodal matricies
         muLogMacro(<< "Writing " << (*isNamesIt) << "." << std::endl);
@@ -368,63 +317,26 @@ void
 AtlasRegistrationMethod<TOutputPixel, TProbabilityPixel>
 ::AverageIntraSubjectRegisteredImages()
 {
-  muLogMacro(<< "Warp intra subject images to the first image" << std::endl);
+  muLogMacro(<< "Warp intra subject images within one modality to the first image of that modality channel..." << std::endl);
 
-  for(MapOfFloatImageVectors::iterator mapOfModalImageListsIt = this->m_IntraSubjectOriginalImageList.begin();
-      mapOfModalImageListsIt != this->m_IntraSubjectOriginalImageList.end();
-      ++mapOfModalImageListsIt)
+  // Sanity Checks
+  if(  m_IntraSubjectTransforms.size() != m_IntraSubjectOriginalImageList.size() )
     {
-    FloatImageVector::iterator currModeImageListIt = mapOfModalImageListsIt->second.begin();
-    FloatImageVector::iterator intraImIt = this->m_IntraSubjectOriginalImageList[mapOfModalImageListsIt->first].begin(); // each intra subject image
-    TransformList::iterator intraTxIt = this->m_IntraSubjectTransforms[mapOfModalImageListsIt->first].begin(); // each intra registration transform
-
-    this->m_RegisteredIntraSubjectImagesList[mapOfModalImageListsIt->first].clear(); //Ensure that pushing onto clean list
-    int i = 0;
-    while(currModeImageListIt != mapOfModalImageListsIt->second.end() )
-      {
-      if( (*intraImIt).GetPointer() == this->m_KeySubjectImage.GetPointer() )
-        {
-        this->m_RegisteredIntraSubjectImagesList[mapOfModalImageListsIt->first].push_back( (*intraImIt).GetPointer() );
-        }
-      else
-        {
-        typedef float                               VectorComponentType;
-        typedef itk::Vector<VectorComponentType, 3> VectorPixelType;
-        typedef itk::Image<VectorPixelType,  3>     DisplacementFieldType;
-        InternalImagePointer resampledImage
-                                = GenericTransformImage<InternalImageType,
-                                                        InternalImageType,
-                                                        DisplacementFieldType>( (*intraImIt).GetPointer(),
-                                                                               this->GetModifiableKeySubjectImage(),
-                                                                               (*intraTxIt).GetPointer(),
-                                                                               0,
-                                                                               "Linear",
-                                                                               false);
-        if( this->m_DebugLevel > 7 )
-          {
-          typedef itk::ImageFileWriter<InternalImageType> WriterType;
-          WriterType::Pointer writer = WriterType::New();
-          writer->UseCompressionOn();
-
-          std::ostringstream oss;
-          oss << this->m_OutputDebugDir << "Warped_" << mapOfModalImageListsIt->first
-                                        << "_IntraSubject_to_KeySubjectImage_" << i <<  ".nii.gz" << std::ends;
-          std::string fn = oss.str();
-
-          writer->SetInput( resampledImage );
-          writer->SetFileName(fn.c_str() );
-          writer->Update();
-          muLogMacro( << __FILE__ << " " << __LINE__ << " "  <<  std::endl );
-          }
-
-        this->m_RegisteredIntraSubjectImagesList[mapOfModalImageListsIt->first].push_back( resampledImage );
-        }
-      i++;
-      ++currModeImageListIt;
-      ++intraImIt;
-      ++intraTxIt;
-      }
+    muLogMacro( << "ERROR:  size of input image list does not match to size of intra subject transform list." << std::endl );
+    muLogMacro( << "m_IntraSubjectTransforms.size(): " << m_IntraSubjectTransforms.size() << std::endl );
+    muLogMacro( << "m_IntraSubjectOriginalImageList.size(): " << m_IntraSubjectOriginalImageList.size() << std::endl );
+    itkExceptionMacro(<< "ERROR:  size of input image list does not match to size of intra subject transform list. "
+                      << "m_IntraSubjectTransforms.size() = " << m_IntraSubjectTransforms.size() <<   std::endl
+                      << "m_IntraSubjectOriginalImageList.size() = " << m_IntraSubjectOriginalImageList.size() );
     }
+
+  this->m_RegisteredIntraSubjectImagesList.clear(); //Ensure that pushing onto clean list
+  // Use resampleInPlace to transform all images to the physical space of the first key image.
+  // Then, use linear interpolation to resample all within modality images to a same voxel space.
+  this->m_RegisteredIntraSubjectImagesList =
+    ResampleInPlaceImageList("Linear",
+                             this->m_IntraSubjectOriginalImageList,
+                             this->m_IntraSubjectTransforms);
 
   muLogMacro(<< "Average co-registered Intra subject images" << std::endl);
   this->m_ModalityAveragedOfIntraSubjectImages.clear(); //Ensure that pushing onto clean list
@@ -434,7 +346,7 @@ AtlasRegistrationMethod<TOutputPixel, TProbabilityPixel>
       mapOfRegisteredModalImageListsIt != this->m_RegisteredIntraSubjectImagesList.end();
       ++mapOfRegisteredModalImageListsIt)
     {
-    // If number of image of a modality (T1 or T2) is greater than one; then, the average image between them is computed
+    // If number of image of a modality (e.g. T1, T2, etc) is greater than one; then, the average image between them is computed
     const int numbOfImagesPerModality = mapOfRegisteredModalImageListsIt->second.size();
     if( numbOfImagesPerModality > 1 )
       {
@@ -461,33 +373,36 @@ AtlasRegistrationMethod<TOutputPixel, TProbabilityPixel>
 ::RegisterAtlasToSubjectImages()
 {
   // Sanity Checks
-  if(  (  m_AtlasOriginalImageList.size() != m_IntraSubjectTransforms.size() ) ||
-       ( m_AtlasOriginalImageList.size() != m_IntraSubjectOriginalImageList.size() ) )
+  // currently we have atlases only for T1 and T2 modalities. However, we should still be able to
+  // use other available input modality images (e.g. FLAIR, IDWI, PD, etc) for the segmentation process,
+  // even if they will not be used in atlas to subject registration.
+  if(  m_AtlasOriginalImageList.size() != m_IntraSubjectOriginalImageList.size() )
     {
-    muLogMacro( << "ERROR:  atlas and template image list sizes do not match. " <<   std::endl );
-    muLogMacro( << "m_AtlasOriginalImageList.size() = " << m_AtlasOriginalImageList.size() <<   std::endl );
-    muLogMacro( << "m_IntraSubjectTransforms.size() = " << m_IntraSubjectTransforms.size() <<   std::endl );
-    muLogMacro(<< "m_IntraSubjectOriginalImageList.size() = "
-               << m_IntraSubjectOriginalImageList.size() <<   std::endl );
-    itkExceptionMacro(<< "ERROR:  atlas and template image list sizes do not match. "
-                      << "m_AtlasOriginalImageList.size() = " << m_AtlasOriginalImageList.size() <<   std::endl
-                      << "m_IntraSubjectTransforms.size() = " << m_IntraSubjectTransforms.size() <<   std::endl
-                      << "m_IntraSubjectOriginalImageList.size() = " << m_IntraSubjectOriginalImageList.size() );
+    muLogMacro( << "* WARNING *:  atlas and template image list sizes do not match. " <<   std::endl );
+    muLogMacro( << "There are atlas images for " << m_AtlasOriginalImageList.size() << " modalities;" <<   std::endl );
+    muLogMacro( << "However, input images belong to " << m_IntraSubjectOriginalImageList.size() << " modality channels." <<   std::endl );
+    muLogMacro( << "Only the first " << m_AtlasOriginalImageList.size()
+                << " modality channels will be used in atlas to subject registration." <<   std::endl );
     }
 
-  // TODO:  Need to make this register all the atlas filenames to all the
-  //       reference images.  Should probably do it in reverse order.
-  muLogMacro(<< "Register atlas to subject images" << std::endl);
-  // Shortcut if the registration has been done previously.
-  const bool SkipIfExistsForDebug = false; //This is a debugging step that should not normally be used
-  if( SkipIfExistsForDebug && itksys::SystemTools::FileExists( this->m_AtlasToSubjectTransformFileName.c_str() ) )
+  muLogMacro(<< "\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^" << std::endl);
+  muLogMacro(<< "Register atlas to subject images..." << std::endl);
+  muLogMacro(<< "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n" << std::endl);
+
+  /*****  Shortcut if the registration has been done previously. ******/
+  // If this final transform filename exists,
+  // it will be just read in and will be used directly
+  // without doing the registration.
+  if( itksys::SystemTools::FileExists( this->m_AtlasToSubjectTransformFileName.c_str() ) )
     {
     try
       {
+      std::cout << "****************************************" << std::endl;
       muLogMacro(<< "Reading cached Atlas to subject transform: "
                  << this->m_AtlasToSubjectTransformFileName << "." << std::endl);
       m_AtlasToSubjectTransform = itk::ReadTransformFromDisk(this->m_AtlasToSubjectTransformFileName);
       // Note:  No need to write this transform to disk
+      std::cout << "****************************************" << std::endl;
       }
     catch( ... )
       {
@@ -504,7 +419,7 @@ AtlasRegistrationMethod<TOutputPixel, TProbabilityPixel>
     // Note:  No need to write this transform to disk
     return;
     }
-  else // We actaully need to run a registration
+  else /***** We actaully need to run a registration ******/
     {
     typedef itk::BRAINSFitHelper HelperType;
     HelperType::Pointer atlasToSubjectRegistrationHelper = HelperType::New();
@@ -521,13 +436,15 @@ AtlasRegistrationMethod<TOutputPixel, TProbabilityPixel>
       }
     // Deal with creating an initial transform.
     std::string atlasToSubjectInitialTransformName = "";
+    bool runSyNFull = true; // This flag runs SyN registration in mulitple resolution levels.
       {
       std::cout << "****************************************" << std::endl;
       if( m_AtlasLinearTransformChoice == "SyN" && this->m_RestoreState.IsNotNull() )
         {
-        std::cout << "SyN registration is resotred from state, and no atlasToSubjectInitialTransform is needed."
+        std::cout << "SyN registration is restored from state, and no atlasToSubjectInitialTransform is needed."
                   << std::endl;
         this->m_AtlasToSubjectInitialTransform = ITK_NULLPTR;
+        runSyNFull = false; // When SyN is restored from state, we need to run that only in full resolution level.
         }
       else if( this->m_AtlasToSubjectInitialTransform.IsNotNull() )
         {
@@ -554,7 +471,7 @@ AtlasRegistrationMethod<TOutputPixel, TProbabilityPixel>
       // will break algorithm for many other segmentation types.
       }
 
-    muLogMacro(<< "Registering first atlas images to first subject image." << std::endl);
+    muLogMacro(<< "Registering first atlas image to first subject image." << std::endl);
     // Initialize the outputTransform with the initializer before starting the loop.
     this->m_AtlasToSubjectTransform = this->m_AtlasToSubjectInitialTransform;
     if( this->m_AtlasToSubjectTransform.IsNotNull() )
@@ -573,13 +490,19 @@ AtlasRegistrationMethod<TOutputPixel, TProbabilityPixel>
     // Set the fixed and moving image
     atlasToSubjectRegistrationHelper->SetFixedVolume(this->m_ModalityAveragedOfIntraSubjectImages[0]); // by AverageIntraSubjectRegisteredImages function
     atlasToSubjectRegistrationHelper->SetMovingVolume(this->GetFirstAtlasOriginalImage());
-    if( this->m_ModalityAveragedOfIntraSubjectImages.size() > 1 )
+    InternalImagePointer SecondImagePointer = this->GetSecondModalityAtlasOriginalImage("T2");
+    //if ( SecondImagePointer.IsNull() ) //HACK: This is not a great solution, and it requires the atlas to have a PD image
+    //{
+    //    muLogMacro( << "Multimodal Registration will be run using a PD image." <<   std::endl );
+    //    SecondImagePointer = this->GetSecondModalityAtlasOriginalImage("PD");
+    //}
+    if( this->m_ModalityAveragedOfIntraSubjectImages.size() > 1  && SecondImagePointer.IsNotNull() )
         {
-        muLogMacro( << "Multimodal Registration will be run." <<   std::endl );
-        muLogMacro( << "because number of modalities is." << this->m_ModalityAveragedOfIntraSubjectImages.size() <<  std::endl );
+        muLogMacro( << "Multimodal registration will be run using the first two modalities." <<   std::endl );
+        muLogMacro( << "Number of modalities is: " << this->m_ModalityAveragedOfIntraSubjectImages.size() <<  std::endl );
         //std::cout<<this->GetSecondModalityAtlasOriginalImage("T2")<<std::endl;
         atlasToSubjectRegistrationHelper->SetFixedVolume2(this->m_ModalityAveragedOfIntraSubjectImages[1]); // by AverageIntraSubjectRegisteredImages function
-        atlasToSubjectRegistrationHelper->SetMovingVolume2(this->GetSecondModalityAtlasOriginalImage("T2"));
+        atlasToSubjectRegistrationHelper->SetMovingVolume2(SecondImagePointer);
         }
     else
         {
@@ -587,12 +510,13 @@ AtlasRegistrationMethod<TOutputPixel, TProbabilityPixel>
         muLogMacro( << "Multimodal Registration will NOT be run." <<   std::endl );
         }
     muLogMacro( << "Generating MovingImage Mask (Atlas 0)" <<   std::endl );
+    const int dilateSize = 10;
+    const int closingSize = 15;
     typedef itk::BRAINSROIAutoImageFilter<InternalImageType, itk::Image<unsigned char, 3> > LocalROIAutoType;
     typename LocalROIAutoType::Pointer  ROIFilter = LocalROIAutoType::New();
     ROIFilter->SetInput(this->GetFirstAtlasOriginalImage());
-    ROIFilter->SetDilateSize(1);   // Only use a very small non-tissue
-    // region outside of head during
-    // initial runnings
+    ROIFilter->SetClosingSize(closingSize);
+    ROIFilter->SetDilateSize(dilateSize);
     ROIFilter->Update();
     atlasToSubjectRegistrationHelper->SetMovingBinaryVolume(ROIFilter->GetSpatialObjectROI() );
     if( this->m_DebugLevel > 7 )
@@ -603,7 +527,7 @@ AtlasRegistrationMethod<TOutputPixel, TProbabilityPixel>
       writer->UseCompressionOn();
 
       std::ostringstream oss;
-      oss << this->m_OutputDebugDir << "Atlas_MovingMask_0.nii.gz" << std::ends;
+      oss << this->m_OutputDebugDir << "AtlasToSubjectRegistration_MovingMask_0.nii.gz" << std::ends;
       std::string fn = oss.str();
 
       writer->SetInput( movingMaskImage );
@@ -612,13 +536,12 @@ AtlasRegistrationMethod<TOutputPixel, TProbabilityPixel>
       muLogMacro( << __FILE__ << " " << __LINE__ << " "  <<   std::endl );
       }
 
-    muLogMacro( << "Generating FixedImage Mask (Atlas)" <<   std::endl );
+    muLogMacro( << "Generating FixedImage Mask (Subject)" <<   std::endl );
     typedef itk::BRAINSROIAutoImageFilter<InternalImageType, itk::Image<unsigned char, 3> > LocalROIAutoType;
     ROIFilter = LocalROIAutoType::New();
     ROIFilter->SetInput(this->GetModifiableKeySubjectImage());
-    ROIFilter->SetDilateSize(1);   // Only use a very small non-tissue
-    // region outside of head during
-    // initial runnings
+    ROIFilter->SetClosingSize(closingSize);
+    ROIFilter->SetDilateSize(dilateSize);
     ROIFilter->Update();
     atlasToSubjectRegistrationHelper->SetFixedBinaryVolume(ROIFilter->GetSpatialObjectROI() );
     if( this->m_DebugLevel > 7 )
@@ -629,7 +552,7 @@ AtlasRegistrationMethod<TOutputPixel, TProbabilityPixel>
       writer->UseCompressionOn();
 
       std::ostringstream oss;
-      oss << this->m_OutputDebugDir << "SubjectForAtlas_FixedMask_0.nii.gz";
+      oss << this->m_OutputDebugDir << "AtlasToSubjectRegistration_FixedMask_0.nii.gz";
       std::string fn = oss.str();
 
       writer->SetInput( fixedMaskImage );
@@ -736,7 +659,7 @@ AtlasRegistrationMethod<TOutputPixel, TProbabilityPixel>
       transformType.push_back("SyN");
       atlasToSubjectRegistrationHelper->SetMinimumStepLength(minimumStepSize);
       atlasToSubjectRegistrationHelper->SetTransformType(transformType);
-      atlasToSubjectRegistrationHelper->SetSyNFull(false);
+      atlasToSubjectRegistrationHelper->SetSyNFull(runSyNFull);
       }
     else
       {
@@ -781,7 +704,7 @@ AtlasRegistrationMethod<TOutputPixel, TProbabilityPixel>
                  << " " << m_AtlasToSubjectTransform->GetParameters() <<   std::endl );
       }
 */
-    // End generating the best initial transform for atlas T1 to subject T1
+    // End generating the best initial transform from atlas to subject.
     muLogMacro(<< "Writing " << this->m_AtlasToSubjectTransformFileName << "." << std::endl);
     itk::WriteTransformToDisk<double, float>(m_AtlasToSubjectTransform, this->m_AtlasToSubjectTransformFileName);
     }
@@ -795,12 +718,17 @@ AtlasRegistrationMethod<TOutputPixel, TProbabilityPixel>
   // Intra subject MUST be done first
   // This function registers all the input subjects to the First image (m_KeySubjectImage),
   // and provides a map of registration transforms (m_IntraSubjectTransforms).
+  /*
+  NOTE: Intra subject image registration must only be rigid!
+  */
   this->RegisterIntraSubjectImages();
 
-  // This function warps all of intra subject images (m_IntraSubjectOrigImageList) to the
-  // key subject image using the intra subject registration transforms (m_IntraSubjectTransforms).
-  // Then, it averages all T1s together and T2s together to provide (this->m_ModalityAveragedOfIntraSubjectImages[0])
-  //  and (this->m_ModalityAveragedOfIntraSubjectImages[1])
+  // This function warps all of intra subject images of one modality to the first image of that modality channel
+  // using the intra subject registration transforms (m_IntraSubjectTransforms).
+  // Then, it averages all images within one modality together (e.g. all T1s together and T2s together),
+  // and put them in "this->m_ModalityAveragedOfIntraSubjectImages".
+  // Note that this->m_ModalityAveragedOfIntraSubjectImages[0] and this->m_ModalityAveragedOfIntraSubjectImages[1]
+  // (related to T1 and T2 modalities) will be used in a multi modal registration framework for atlas to subject registration.
   this->AverageIntraSubjectRegisteredImages();
 
   // Atlas to subject registration is done as a multi-modal registration using

@@ -30,6 +30,9 @@ Examples:
   $ template.py --rewrite-datasinks --pe OSX --ExperimentConfig my_baw.config 2001
 
 """
+from __future__ import print_function
+from __future__ import absolute_import
+from builtins import range
 import glob
 import os
 import sys
@@ -120,16 +123,16 @@ def MergeByExtendListElements(t1s, t2s, pds, fls, labels, posteriors, passive_in
             ListOfImagesDictionaries[subject_index]['FL'] = fls[subject_index]
         if labels[subject_index] is not None:
             ListOfImagesDictionaries[subject_index]['BRAINMASK'] = labels[subject_index]
-        print ListOfImagesDictionaries[subject_index]
-        for key, value in posteriors.items():
+        print(ListOfImagesDictionaries[subject_index])
+        for key, value in list(posteriors.items()):
             # print "key:", key, " -> value:", value
             ListOfImagesDictionaries[subject_index][key] = value[subject_index]
             interpolationMapping[key] = DefaultContinuousInterpolationType
-        for key, value in passive_intensities.items():
+        for key, value in list(passive_intensities.items()):
             # print "key:", key, " -> value:", value
             ListOfImagesDictionaries[subject_index][key] = value[subject_index]
             interpolationMapping[key] = DefaultContinuousInterpolationType
-        for key, value in passive_masks.items():
+        for key, value in list(passive_masks.items()):
             # print "key:", key, " -> value:", value
             ListOfImagesDictionaries[subject_index][key] = value[subject_index]
             interpolationMapping[key] = 'MultiLabel'
@@ -145,11 +148,18 @@ def xml_filename(subject):
     return 'AtlasDefinition_{0}.xml'.format(subject)
 
 def getSessionsFromSubjectDictionary(subject_session_dictionary,subject):
+    print("#"+subject+"#"*80+"\n")
+    print(subject_session_dictionary[subject])
+    if len(subject_session_dictionary[subject]) == 0 :
+        import sys
+        print(subject_session_dictionary)
+        print("ERROR:  No sessions for subject {0}".format(subject) )
+        sys.exit(-1)
     return subject_session_dictionary[subject]
 
 
 def _template_runner(argv, environment, experiment, pipeline_options, cluster):
-    print "Getting subjects from database..."
+    print("Getting subjects from database...")
     # subjects = argv["--subjects"].split(',')
     subjects, subjects_sessions_dictionary = get_subjects_sessions_dictionary(argv['SUBJECTS'],
             experiment['cachedir'],
@@ -159,17 +169,24 @@ def _template_runner(argv, environment, experiment, pipeline_options, cluster):
             argv['--use-sentinal'], argv['--use-shuffle']
             ) # Build database before parallel section
     useSentinal = argv['--use-sentinal']
+
+    # Quick preliminary sanity check
+    for thisSubject in subjects:
+        if len(subjects_sessions_dictionary[thisSubject]) == 0:
+            print("ERROR: subject {0} has no sessions found.  Did you supply a valid subject id on the command line?".format(thisSubject) )
+            sys.exit(-1)
+
     for thisSubject in subjects:
         print("Processing atlas generation for this subject: {0}".format(thisSubject))
         print("="*80)
-        print "Copying Atlas directory and determining appropriate Nipype options..."
-        pipeline_options = nipype_options(argv, pipeline_options, cluster, experiment, environment)  # Generate Nipype options
-        print "Dispatching jobs to the system..."
+        print("Copying Atlas directory and determining appropriate Nipype options...")
+        subj_pipeline_options = nipype_options(argv, pipeline_options, cluster, experiment, environment)  # Generate Nipype options
+        print("Dispatching jobs to the system...")
         ######
         ###### Now start workflow construction
         ######
         # Set universal pipeline options
-        nipype_config.update_config(pipeline_options)
+        nipype_config.update_config(subj_pipeline_options)
 
         ready_for_template_building = True
         for thisSession in subjects_sessions_dictionary[thisSubject]:
@@ -183,7 +200,7 @@ def _template_runner(argv, environment, experiment, pipeline_options, cluster):
             print("TEMPORARY SKIPPING:  Not ready to process {0}".format(thisSubject))
             continue
 
-        base_output_directory = os.path.join(pipeline_options['logging']['log_directory'],thisSubject)
+        base_output_directory = os.path.join(subj_pipeline_options['logging']['log_directory'],thisSubject)
         template = pe.Workflow(name='SubjectAtlas_Template_'+thisSubject)
         template.base_dir = base_output_directory
 
@@ -199,12 +216,12 @@ def _template_runner(argv, environment, experiment, pipeline_options, cluster):
 
 
         baselineOptionalDG = pe.MapNode(nio.DataGrabber(infields=['subject','session'],
-                                                outfields=[ 't2_average', 'pd_average',
-                                                           'fl_average'],
-                                run_without_submitting=True
-                                ),
-                                run_without_submitting=True,
-                                iterfield=['session'], name='BaselineOptional_DG')
+                                                        outfields=[ 't2_average', 'pd_average',
+                                                                   'fl_average'],
+                                                       run_without_submitting=True
+                                                       ),
+                                        run_without_submitting=True,
+                                        iterfield=['session'], name='BaselineOptional_DG')
 
         baselineOptionalDG.inputs.base_directory = experiment['previousresult']
         baselineOptionalDG.inputs.sort_filelist = True
@@ -322,15 +339,18 @@ def _template_runner(argv, environment, experiment, pipeline_options, cluster):
         myInitAvgWF = pe.Node(interface=ants.AverageImages(), name='Atlas_antsSimpleAverage')  # was 'Phase1_antsSimpleAverage'
         myInitAvgWF.inputs.dimension = 3
         myInitAvgWF.inputs.normalize = True
+        myInitAvgWF.inputs.num_threads = -1
         template.connect(baselineRequiredDG, 't1_average', myInitAvgWF, "images")
         ####################################################################################################
         # TEMPLATE_BUILD_RUN_MODE = 'MULTI_IMAGE'
         # if numSessions == 1:
         #     TEMPLATE_BUILD_RUN_MODE = 'SINGLE_IMAGE'
         ####################################################################################################
-        buildTemplateIteration1 = BAWantsRegistrationTemplateBuildSingleIterationWF('iteration01')
+        CLUSTER_QUEUE=cluster['queue']
+        CLUSTER_QUEUE_LONG=cluster['long_q']
+        buildTemplateIteration1 = BAWantsRegistrationTemplateBuildSingleIterationWF('iteration01',CLUSTER_QUEUE,CLUSTER_QUEUE_LONG)
         # buildTemplateIteration2 = buildTemplateIteration1.clone(name='buildTemplateIteration2')
-        buildTemplateIteration2 = BAWantsRegistrationTemplateBuildSingleIterationWF('Iteration02')
+        buildTemplateIteration2 = BAWantsRegistrationTemplateBuildSingleIterationWF('Iteration02',CLUSTER_QUEUE,CLUSTER_QUEUE_LONG)
 
         CreateAtlasXMLAndCleanedDeformedAveragesNode = pe.Node(interface=Function(function=CreateAtlasXMLAndCleanedDeformedAverages,
                                                               input_names=['t1_image', 'deformed_list', 'AtlasTemplate', 'outDefinition'],
@@ -339,25 +359,25 @@ def _template_runner(argv, environment, experiment, pipeline_options, cluster):
                                            run_without_submitting=True,  # HACK:  THIS NODE REALLY SHOULD RUN ON THE CLUSTER!
                                            name='99_CreateAtlasXMLAndCleanedDeformedAverages')
 
-        if pipeline_options['plugin_name'].startswith('SGE'):  # for some nodes, the qsub call needs to be modified on the cluster
+        if subj_pipeline_options['plugin_name'].startswith('SGE'):  # for some nodes, the qsub call needs to be modified on the cluster
 
-            CreateAtlasXMLAndCleanedDeformedAveragesNode.plugin_args = {'template': pipeline_options['plugin_args']['template'],
+            CreateAtlasXMLAndCleanedDeformedAveragesNode.plugin_args = {'template': subj_pipeline_options['plugin_args']['template'],
                                                     'qsub_args': modify_qsub_args(cluster['queue'], 1, 1, 1),
                                                     'overwrite': True}
             for bt in [buildTemplateIteration1, buildTemplateIteration2]:
                 BeginANTS = bt.get_node("BeginANTS")
-                BeginANTS.plugin_args = {'template': pipeline_options['plugin_args']['template'], 'overwrite': True,
-                                         'qsub_args': modify_qsub_args(cluster['queue'], 4, 2, 4)}
+                BeginANTS.plugin_args = {'template': subj_pipeline_options['plugin_args']['template'], 'overwrite': True,
+                                         'qsub_args': modify_qsub_args(cluster['queue'], 7, 4, 16)}
                 wimtdeformed = bt.get_node("wimtdeformed")
-                wimtdeformed.plugin_args = {'template': pipeline_options['plugin_args']['template'], 'overwrite': True,
+                wimtdeformed.plugin_args = {'template': subj_pipeline_options['plugin_args']['template'], 'overwrite': True,
                                             'qsub_args': modify_qsub_args(cluster['queue'], 2, 2, 2)}
 
                 #AvgAffineTransform = bt.get_node("AvgAffineTransform")
-                #AvgAffineTransform.plugin_args = {'template': pipeline_options['plugin_args']['template'], 'overwrite': True,
+                #AvgAffineTransform.plugin_args = {'template': subj_pipeline_options['plugin_args']['template'], 'overwrite': True,
                 #                                  'qsub_args': modify_qsub_args(cluster['queue'], 2, 1, 1)}
 
                 wimtPassivedeformed = bt.get_node("wimtPassivedeformed")
-                wimtPassivedeformed.plugin_args = {'template': pipeline_options['plugin_args']['template'], 'overwrite': True,
+                wimtPassivedeformed.plugin_args = {'template': subj_pipeline_options['plugin_args']['template'], 'overwrite': True,
                                                     'qsub_args': modify_qsub_args(cluster['queue'], 2, 2, 4)}
 
         # Running off previous baseline experiment
@@ -385,7 +405,7 @@ def _template_runner(argv, environment, experiment, pipeline_options, cluster):
 
         # Create DataSinks
         SubjectAtlas_DataSink = pe.Node(nio.DataSink(), name="Subject_DS")
-        SubjectAtlas_DataSink.overwrite = pipeline_options['ds_overwrite']
+        SubjectAtlas_DataSink.overwrite = subj_pipeline_options['ds_overwrite']
         SubjectAtlas_DataSink.inputs.base_directory = experiment['resultdir']
 
         template.connect([(subjectNode, SubjectAtlas_DataSink, [('subject', 'container')]),
@@ -400,9 +420,9 @@ def _template_runner(argv, environment, experiment, pipeline_options, cluster):
         dotfilename = argv['--dotfilename']
         if dotfilename is not None:
             print("WARNING: Printing workflow, but not running pipeline")
-            print_workflow(template, plugin=pipeline_options['plugin_name'], dotfilename=dotfilename)
+            print_workflow(template, plugin=subj_pipeline_options['plugin_name'], dotfilename=dotfilename)
         else:
-            run_workflow(template, plugin=pipeline_options['plugin_name'], plugin_args=pipeline_options['plugin_args'])
+            run_workflow(template, plugin=subj_pipeline_options['plugin_name'], plugin_args=subj_pipeline_options['plugin_args'])
 
 if __name__ == '__main__':
     import sys
@@ -411,11 +431,11 @@ if __name__ == '__main__':
     from docopt import docopt
 
     argv = docopt(__doc__, version='1.1')
-    print argv
+    print(argv)
     if argv['--workphase'] != 'subject-template-generation':
         print("ERROR: Only --workphase subject-template-generation supported for template building")
         sys.exit(-1)
-    print '=' * 100
+    print('=' * 100)
     environment, experiment, pipeline, cluster = setup_environment(argv)
     from nipype import config as nipype_config
     import nipype.pipeline.engine as pe
@@ -430,6 +450,6 @@ if __name__ == '__main__':
     from workflows.utils import run_workflow, print_workflow
     from BAWantsRegistrationBuildTemplate import BAWantsRegistrationTemplateBuildSingleIterationWF
     from utilities.configFileParser import nipype_options
-    from SEMTools.testing.generateaveragelmkfile import GenerateAverageLmkFile
+    from nipype.interfaces.semtools.testing.generateaveragelmkfile import GenerateAverageLmkFile
     exit = _template_runner(argv, environment, experiment, pipeline, cluster)
     sys.exit(exit)

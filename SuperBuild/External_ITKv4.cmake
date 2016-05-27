@@ -1,8 +1,12 @@
 
 set(proj ITKv4)
 set(ITK_EXTERNAL_NAME ${proj})
+
 # Set dependency list
-set(${proj}_DEPENDENCIES "zlib" VTK)
+set(${proj}_DEPENDENCIES "zlib")
+if(${PRIMARY_PROJECT_NAME}_REQUIRES_VTK)
+  list(APPEND ${proj}_DEPENDENCIES VTK)
+endif()
 #if(${CMAKE_PROJECT_NAME}_BUILD_DICOM_SUPPORT)
   list(APPEND ${proj}_DEPENDENCIES DCMTK)
 #endif()
@@ -12,7 +16,7 @@ ExternalProject_Include_Dependencies(${proj} PROJECT_VAR proj DEPENDS_VAR ${proj
 
 if(${CMAKE_PROJECT_NAME}_USE_SYSTEM_${proj})
   unset(ITK_DIR CACHE)
-  find_package(ITK 4.6 COMPONENTS ${${CMAKE_PROJECT_NAME}_ITK_COMPONENTS} REQUIRED NO_MODULE)
+  find_package(ITK 4.9 COMPONENTS ${${CMAKE_PROJECT_NAME}_ITK_COMPONENTS} REQUIRED NO_MODULE)
 endif()
 
 # Sanity checks
@@ -22,11 +26,13 @@ endif()
 
 if(NOT DEFINED ITK_DIR AND NOT ${CMAKE_PROJECT_NAME}_USE_SYSTEM_${proj})
 
-  if(BRAINSTools_REQUIRES_VTK) ## QT requires VTK support in ITK
-    set( ITK_VTK_OPTIONS
+  set(ITK_VTK_OPTIONS )
+
+  if(${PRIMARY_PROJECT_NAME}_REQUIRES_VTK)
+    list(APPEND ITK_VTK_OPTIONS
+      -DModule_ITKVtkGlue:BOOL=ON
       -DVTK_DIR:PATH=${VTK_DIR}
-      -DModule_ITKVtkGlue:BOOL=ON  ## If building with GUI, then need ITKVtkGlue
-    )
+      )
   endif()
 
   if(NOT DEFINED git_protocol)
@@ -34,7 +40,7 @@ if(NOT DEFINED ITK_DIR AND NOT ${CMAKE_PROJECT_NAME}_USE_SYSTEM_${proj})
   endif()
 
   set(${proj}_REPOSITORY ${git_protocol}://itk.org/ITK.git)
-  set(${proj}_GIT_TAG e1d9ea7f7624787443163dabf62a7e0c55fae3cc ) # 2015-05-12
+  set(${proj}_GIT_TAG 2129e0b8d66d8d2b4d0fb730e86370f9e0d3317e ) # 20160418
   set(EXTERNAL_PROJECT_OPTIONAL_CMAKE_CACHE_ARGS)
 
   if(NOT ${CMAKE_PROJECT_NAME}ITKV3_COMPATIBILITY AND CMAKE_CL_64)
@@ -45,20 +51,10 @@ if(NOT DEFINED ITK_DIR AND NOT ${CMAKE_PROJECT_NAME}_USE_SYSTEM_${proj})
       )
   endif()
 
-  if(${CMAKE_PROJECT_NAME}USE_PYTHONQT)
-    # XXX Ensure python executable used for ITKModuleHeaderTest
-    #     is the same as Slicer.
-    #     This will keep the sanity check implemented in SlicerConfig.cmake
-    #     quiet.
-    list(APPEND EXTERNAL_PROJECT_OPTIONAL_CMAKE_CACHE_ARGS
-      -DPYTHON_EXECUTABLE:PATH=${PYTHON_EXECUTABLE}
-      )
-  endif()
-
   ExternalProject_Add(${proj}
     ${${proj}_EP_ARGS}
     GIT_REPOSITORY ${ITKv4_REPOSITORY}
-    GIT_TAG ${ITKv4_GIT_TAG}
+    GIT_TAG ${${proj}_GIT_TAG}
     SOURCE_DIR ${proj}
     BINARY_DIR ${proj}-build
     CMAKE_CACHE_ARGS
@@ -66,11 +62,13 @@ if(NOT DEFINED ITK_DIR AND NOT ${CMAKE_PROJECT_NAME}_USE_SYSTEM_${proj})
       -DCMAKE_CXX_FLAGS:STRING=${ep_common_cxx_flags}
       -DCMAKE_C_COMPILER:FILEPATH=${CMAKE_C_COMPILER}
       -DCMAKE_C_FLAGS:STRING=${ep_common_c_flags}
+      -DCMAKE_CXX_STANDARD:STRING=${CMAKE_CXX_STANDARD}
       -DBUILD_TESTING:BOOL=OFF
       -DBUILD_EXAMPLES:BOOL=OFF
       -DITK_LEGACY_REMOVE:BOOL=ON
       -DITKV3_COMPATIBILITY:BOOL=OFF
       -DITK_BUILD_DEFAULT_MODULES:BOOL=ON
+      -DModule_AnisotropicDiffusionLBR:BOOL=ON
       -DModule_ITKReview:BOOL=ON
       -DBUILD_SHARED_LIBS:BOOL=OFF
       -DITK_INSTALL_NO_DEVELOPMENT:BOOL=ON
@@ -85,11 +83,10 @@ if(NOT DEFINED ITK_DIR AND NOT ${CMAKE_PROJECT_NAME}_USE_SYSTEM_${proj})
       -DZLIB_ROOT:PATH=${ZLIB_ROOT}
       -DZLIB_INCLUDE_DIR:PATH=${ZLIB_INCLUDE_DIR}
       -DZLIB_LIBRARY:FILEPATH=${ZLIB_LIBRARY}
-      -DModule_MGHIO:BOOL=ON        #To provide FreeSurfer Compatibility
+      -DModule_MGHIO:BOOL=ON        #To provide FreeSurfer Compatibility Required!
       -DITK_USE_FFTWD:BOOL=ON
       -DITK_USE_FFTWF:BOOL=ON
       ${ITK_VTK_OPTIONS}
-      -DVTK_DIR:PATH=${VTK_DIR}
     INSTALL_COMMAND ""
     DEPENDS
       ${${proj}_DEPENDENCIES}

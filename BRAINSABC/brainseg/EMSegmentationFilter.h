@@ -33,7 +33,7 @@
 #ifndef __EMSegmentationFilter_h
 #define __EMSegmentationFilter_h
 
-#include "BRAINSABCUtilities.h"
+#include "GeneratePurePlugMask.h"
 #include <map>
 #include <list>
 class AtlasDefinition;
@@ -60,7 +60,7 @@ public:
 
   typedef double CoordinateRepType;
 
-  typedef typename std::map<std::string,  std::map<std::string, AtlasDefinition::BoundsType> > RangeDBType;
+  typedef orderedmap<std::string,  orderedmap<std::string, AtlasDefinition::BoundsType> > RangeDBType;
   // Image types
   typedef TInputImage                       InputImageType;
   typedef typename TInputImage::Pointer     InputImagePointer;
@@ -74,7 +74,7 @@ public:
   typedef std::vector<InputImagePixelType> BackgroundValueVector;
 
   typedef std::vector<InputImagePointer> InputImageVector;
-  typedef std::map<std::string, InputImageVector> MapOfInputImageVectors;
+  typedef orderedmap<std::string, InputImageVector> MapOfInputImageVectors;
 
   typedef typename ByteImageType::Pointer    ByteImagePointer;
   typedef typename ByteImageType::IndexType  ByteImageIndexType;
@@ -113,11 +113,31 @@ public:
 
   typedef itk::Transform<double, 3, 3>  GenericTransformType;
 
-  typedef std::vector< FloatingPrecision >                      MeasurementVectorType;
+  typedef itk::Array< FloatingPrecision >                       MeasurementVectorType;
   typedef itk::Statistics::ListSample< MeasurementVectorType >  SampleType;
+
+  typedef itk::NearestNeighborInterpolateImageFunction< InputImageType, double > InputImageNNInterpolationType;
+  typedef itk::NearestNeighborInterpolateImageFunction< ByteImageType, double >  MaskNNInterpolationType;
+
+  typedef std::vector<typename InputImageNNInterpolationType::Pointer> InputImageInterpolatorVector;
+  typedef orderedmap<std::string, InputImageInterpolatorVector>        MapOfInputImageInterpolatorVectors;
 
   itkSetMacro(UseKNN, bool);
   itkGetMacro(UseKNN, bool);
+
+  itkSetMacro(UsePurePlugs, bool);
+  itkGetMacro(UsePurePlugs, bool);
+
+  itkSetMacro(PurePlugsThreshold, float);
+  itkGetMacro(PurePlugsThreshold, float);
+
+  void SetNumberOfSubSamplesInEachPlugArea(unsigned int nx, unsigned int ny, unsigned int nz)
+    {
+    m_NumberOfSubSamplesInEachPlugArea[0] = nx;
+    m_NumberOfSubSamplesInEachPlugArea[1] = ny;
+    m_NumberOfSubSamplesInEachPlugArea[2] = nz;
+    this->Modified();
+    }
 
   // Set/Get the maximum polynomial degree of the bias field estimate
   itkSetMacro(MaxBiasDegree, unsigned int);
@@ -260,10 +280,7 @@ protected:
                                        const ProbabilityImageVectorType &WarpedPriorsList,
                                        ByteImagePointer &NonAirRegion);
 
-  ByteImageVectorType ForceToOne(const unsigned int CurrentEMIteration,
-                                 // const MapOfInputImageVectors &intensityList,
-                                 ProbabilityImageVectorType &WarpedPriorsList,
-                                 typename ByteImageType::Pointer NonAirRegion);
+  ByteImageVectorType ForceToOne(ProbabilityImageVectorType &WarpedPriorsList);
 private:
 
   void WritePartitionTable(const unsigned int CurrentEMIteration) const;
@@ -292,9 +309,6 @@ private:
 
   void InitializePosteriors(void);
 
-  typename TInputImage::Pointer
-  NormalizeInputIntensityImage(const typename TInputImage::Pointer inputImage);
-
   void
   kNNCore( SampleType * trainMatrix,
            const vnl_vector<FloatingPrecision> & labelVector,
@@ -310,7 +324,8 @@ private:
   ComputekNNPosteriors(const ProbabilityImageVectorType & Priors,
                         const MapOfInputImageVectors & IntensityImages,
                         ByteImagePointer & CleanedLabels,
-                        const IntVectorType & labelClasses);
+                        const IntVectorType & labelClasses,
+                        const std::vector<bool> & priorIsForegroundPriorVector);
 
   typename TProbabilityImage::Pointer
   ComputeOnePosterior(const FloatingPrecision priorScale,
@@ -440,7 +455,12 @@ private:
 
   std::vector<RegionStats> m_ListOfClassStatistics;
 
-  bool         m_UseKNN;
+  bool              m_UseKNN;
+
+  bool              m_UsePurePlugs;
+  float             m_PurePlugsThreshold;
+  unsigned int      m_NumberOfSubSamplesInEachPlugArea[3];
+  ByteImagePointer  m_PurePlugsMask;
 
   bool         m_UpdateTransformation;
   unsigned int m_DebugLevel;

@@ -30,6 +30,10 @@ PIPELINE
              -> JointFusion(), iterfield=[sample_list, test_list])
              -> DataSink()
 """
+from __future__ import print_function
+from __future__ import absolute_import
+from builtins import str
+from builtins import range
 import os.path
 
 from nipype.pipeline.engine import Workflow, Node, MapNode
@@ -55,18 +59,18 @@ def subsample_crossValidationSet(length, test_size):
     """
     test_size = int(test_size)
     subsample_data_index = []
-    base_train = range(test_size)
+    base_train = list(range(test_size))
     for x in range(0, length, test_size):
         test = [y + x for y in base_train]
-        train = range(length)
+        train = list(range(length))
         for y in test:
             try:
                 train.remove(y)
             except ValueError:
                 raise ValueError("List test size is not evenly divisible by N({0})".format(test_size))
         subsample_data_index.append( {'train':train, 'test':test } )
-    print "="*80
-    print subsample_data_index
+    print("="*80)
+    print(subsample_data_index)
     return subsample_data_index
 
 def writeCVSubsetFile( environment, experiment, pipeline, cluster, csv_file, test_size, hasHeader):
@@ -85,16 +89,17 @@ def writeCVSubsetFile( environment, experiment, pipeline, cluster, csv_file, tes
           reader = csv.DictReader(infile, skipinitialspace=True)
           for row in reader:
             csv_data.append(row)
-    print csv_data
+    print(csv_data)
 
     totalSampleSize = len(csv_data)
-    print totalSampleSize
+    print(totalSampleSize)
     cv_subsets = subsample_crossValidationSet( totalSampleSize, test_size)
 
     """
     global variable
     """
-    BASE_DATA_GRABBER_DIR='/Shared/johnsonhj/HDNI/Neuromorphometrics/20141116_Neuromorphometrics_base_Results/Neuromorphometrics/2012Subscription'
+    ## HACK FOR NOW SHOULD BE MORE ELEGANT FROM THE .config file
+    BASE_DATA_GRABBER_DIR='/Shared/johnsonhj/HDNI/ReferenceData/Neuromorphometrics/2012Subscription'
     #master_config = {'queue':'HJ',
     #    'long_q':'HJ'}
 
@@ -103,24 +108,24 @@ def writeCVSubsetFile( environment, experiment, pipeline, cluster, csv_file, tes
     """
     import nipype.pipeline.engine as pe
     import nipype.interfaces.io as nio
-    from WorkupT1T2MALF import CreateMALFWorkflow
-    CV_MALF_WF = pe.Workflow(name="CV_MALF")
-    CV_MALF_WF.base_dir = master_config['cachedir']
+    from .WorkupJointFusion import CreateJointFusionWorkflow
+    CV_JointFusion_WF = pe.Workflow(name="CV_JointFusion")
+    CV_JointFusion_WF.base_dir = master_config['cachedir']
 
 
     subset_no = 1
     for subset in cv_subsets:
-        print "-"*80
-        print " Creat a subset workflow Set " + str(subset_no)
-        print "-"*80
+        print("-"*80)
+        print(" Creat a subset workflow Set " + str(subset_no))
+        print("-"*80)
         trainData = [ csv_data[i] for i in subset['train'] ]
         testData = [ csv_data[i] for i in subset['test'] ]
 
-        print [ (trainData[i])['id'] for i in range( len(trainData))]
+        print([ (trainData[i])['id'] for i in range( len(trainData))])
 
         for testSession in testData:
-            MALFWFName = "MALF_Set{0}_{1}".format(subset_no, testSession['id'])
-            myMALF = CreateMALFWorkflow( MALFWFName,
+            JointFusionWFName = "JointFusion_Set{0}_{1}".format(subset_no, testSession['id'])
+            myJointFusion = CreateJointFusionWorkflow( JointFusionWFName,
                                          master_config,
                                          [ (trainData[i])['id'] for i in range( len(trainData))],
                                          BASE_DATA_GRABBER_DIR,
@@ -136,17 +141,17 @@ def writeCVSubsetFile( environment, experiment, pipeline, cluster, csv_file, tes
                                     run_without_submitting = True,
                                     name=testSessionName)
 
-            CV_MALF_WF.connect(testSessionSpec,'t1_average', myMALF,'inputspec.subj_t1_image')
-            CV_MALF_WF.connect(testSessionSpec,'tissueLabel',myMALF,'inputspec.subj_fixed_head_labels')
+            CV_JointFusion_WF.connect(testSessionSpec,'t1_average', myJointFusion,'inputspec.subj_t1_image')
+            CV_JointFusion_WF.connect(testSessionSpec,'tissueLabel',myJointFusion,'inputspec.subj_fixed_head_labels')
 
-            CV_MALF_WF.connect(testSessionSpec,'template_leftHemisphere', myMALF,'inputspec.subj_left_hemisphere')
-            CV_MALF_WF.connect(testSessionSpec,'landmarkInACPCAlignedSpace', myMALF,'inputspec.subj_lmks')
-            CV_MALF_WF.connect(testSessionSpec,'template_weights_50Lmks_wts', myMALF,'inputspec.atlasWeightFilename')
-            CV_MALF_WF.connect(testSessionSpec, 'labelFilename', myMALF, 'inputspec.labelBaseFilename')
+            CV_JointFusion_WF.connect(testSessionSpec,'template_leftHemisphere', myJointFusion,'inputspec.subj_left_hemisphere')
+            CV_JointFusion_WF.connect(testSessionSpec,'landmarkInACPCAlignedSpace', myJointFusion,'inputspec.subj_lmks')
+            CV_JointFusion_WF.connect(testSessionSpec,'template_weights_50Lmks_wts', myJointFusion,'inputspec.atlasWeightFilename')
+            CV_JointFusion_WF.connect(testSessionSpec, 'labelFilename', myJointFusion, 'inputspec.labelBaseFilename')
 
             """ set test image information
             """
-            print testSession
+            print(testSession)
             testSessionSpec.inputs.t1_average = testSession['t1']
             testSessionSpec.inputs.tissueLabel = testSession['fixed_head_label']
             testSessionSpec.inputs.template_leftHemisphere = testSession['warpedAtlasLeftHemisphere']
@@ -163,13 +168,13 @@ def writeCVSubsetFile( environment, experiment, pipeline, cluster, csv_file, tes
             DataSink.inputs.container = 'CV_Set{0}/{1}'.format(subset_no, testSession['id'])
             DataSink.inputs.base_directory = master_config['resultdir']
 
-            CV_MALF_WF.connect(myMALF, 'outputspec.MALF_neuro2012_labelmap',
-                               DataSink, 'Segmentation.@MALF_neuro2012_labelmap')
+            CV_JointFusion_WF.connect(myJointFusion, 'outputspec.JointFusion_neuro2012_labelmap',
+                               DataSink, 'Segmentation.@JointFusion_neuro2012_labelmap')
 
             subset_no=subset_no+1
 
-    #CV_MALF_WF.write_graph()
-    CV_MALF_WF.run( plugin=master_config['plugin_name'],
+    #CV_JointFusion_WF.write_graph()
+    CV_JointFusion_WF.run( plugin=master_config['plugin_name'],
                     plugin_args=master_config['plugin_args'])
 
 
@@ -185,7 +190,7 @@ class CrossValidationJointFusionWorkflow(Workflow):
         self.csv_file = File(value=os.path.abspath(csv_file), exists=True)
         self.hasHeader = traits.Bool(hasHeader)
         self.sample_size = traits.Int(size)
-        self.config['execution'] = {'remove_unnecessary_outputs': 'false'}
+        self.config['execution'] = {'remove_unnecessary_outputs': 'true'}
 
     def create(self):  #, **kwargs):
         """ Create the nodes and connections for the workflow """
@@ -195,12 +200,12 @@ class CrossValidationJointFusionWorkflow(Workflow):
         csvReader.inputs.header = self.hasHeader.default_value
         csvOut = csvReader.run()
 
-        print "="*80
-        print csvOut.outputs.__dict__
-        print "="*80
+        print("="*80)
+        print(csvOut.outputs.__dict__)
+        print("="*80)
 
         iters = {}
-        label = csvOut.outputs.__dict__.keys()[0]
+        label = list(csvOut.outputs.__dict__.keys())[0]
         result = eval("csvOut.outputs.{0}".format(label))
         iters['tests'], iters['trains'] = subsample_crossValidationSet(result, self.sample_size.default_value)
         # Main event
@@ -225,7 +230,7 @@ class CrossValidationJointFusionWorkflow(Workflow):
             'stop_on_first_rerun': 'false',  # This stops at first attempt to rerun, before running, and before deleting previous results.
             'hash_method': 'timestamp',
             'single_thread_matlab': 'true',  # Multi-core 2011a  multi-core for matrix multiplication.
-            'remove_unnecessary_outputs': 'false',
+            'remove_unnecessary_outputs': 'true',
             'use_relative_paths': 'false',  # relative paths should be on, require hash update when changed.
             'remove_node_directories': 'false',  # Experimental
             'local_hash_check': 'false'
@@ -283,6 +288,7 @@ class FusionLabelWorkflow(Workflow):
         #intensityImages = Node(interface=Merge(2), name='intensityImages')
 
         jointFusion = Node(interface=JointFusion(), name='jointFusion')
+        jointFusion.inputs.num_threads = -1
         jointFusion.inputs.dimension = 3
         jointFusion.inputs.modalities = 1  #TODO: verify 2 for T1/T2
         jointFusion.inputs.method =  "Joint[0.1,2]" # this does not work
@@ -305,9 +311,9 @@ class FusionLabelWorkflow(Workflow):
 def main(environment, experiment, pipeline, cluster, **kwargs):
     from utilities.configFileParser import nipype_options
 
-    print "Copying Atlas directory and determining appropriate Nipype options..."
+    print("Copying Atlas directory and determining appropriate Nipype options...")
     pipeline = nipype_options(kwargs, pipeline, cluster, experiment, environment)  # Generate Nipype options
-    print "Getting session(s) from database..."
+    print("Getting session(s) from database...")
 
     writeCVSubsetFile( environment,
                        experiment,
@@ -330,8 +336,8 @@ if __name__ == "__main__":
     from docopt import docopt
 
     argv = docopt(__doc__, version='1.1')
-    print argv
-    print '=' * 100
+    print(argv)
+    print('=' * 100)
     from AutoWorkup import setup_environment
     if argv['--test']:
         sys.exit(_test())

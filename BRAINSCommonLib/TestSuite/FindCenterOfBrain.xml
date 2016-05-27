@@ -1,13 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <executable>
-  <category>Utility.BRAINS</category>
+  <category>Utilities.BRAINS</category>
   <title>Center Of Brain (BRAINS)</title>
   <description>Finds the center point of a brain</description>
   <documentation-url></documentation-url>
   <license>https://www.nitrc.org/svn/brains/BuildScripts/trunk/License.txt</license>
   <contributor>Hans J. Johnson, hans-johnson -at- uiowa.edu, http://wwww.psychiatry.uiowa.edu</contributor>
   <acknowledgements>Hans Johnson(1,3,4); Kent Williams(1);  (1=University of Iowa Department of Psychiatry, 3=University of Iowa Department of Biomedical Engineering, 4=University of Iowa Department of Electrical and Computer Engineering</acknowledgements>
-  <version>4.4.0</version>
+  <version>4.7.0</version>
   <parameters advanced="false">
     <label>Required Input Parameters</label>
     <image>

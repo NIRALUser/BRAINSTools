@@ -33,8 +33,9 @@ if(NOT DEFINED DCMTK_DIR AND NOT ${CMAKE_PROJECT_NAME}_USE_SYSTEM_${proj})
       )
   endif()
 
-  set(${proj}_REPOSITORY ${git_protocol}://github.com/commontk/DCMTK.git)
-  set(${proj}_GIT_TAG "c5144910c525000151d2d3f2e0066991b3d7e076") # 2015-05-12
+  # DCMTK-3.6.1_20160216 + patch to avoid unneeded recompilation
+  set(${proj}_REPOSITORY ${git_protocol}://github.com/commontk/DCMTK)
+  set(${proj}_GIT_TAG "023b8deab3b64bdcf4e40544b40bdbdbbd05e7a3")
 
   ExternalProject_Add(${proj}
     ${${proj}_EP_ARGS}
@@ -43,11 +44,12 @@ if(NOT DEFINED DCMTK_DIR AND NOT ${CMAKE_PROJECT_NAME}_USE_SYSTEM_${proj})
     SOURCE_DIR ${proj}
     BINARY_DIR ${proj}-build
     CMAKE_CACHE_ARGS
-      ${CMAKE_PROJECT_INCLUDE_EXTERNAL_PROJECT_ARG}
       -DCMAKE_CXX_COMPILER:FILEPATH=${CMAKE_CXX_COMPILER}
       -DCMAKE_CXX_FLAGS:STRING=${ep_common_cxx_flags}
       -DCMAKE_C_COMPILER:FILEPATH=${CMAKE_C_COMPILER}
       -DCMAKE_C_FLAGS:STRING=${ep_common_c_flags}
+      -DCMAKE_CXX_STANDARD:STRING=${CMAKE_CXX_STANDARD}
+      ${CMAKE_PROJECT_INCLUDE_EXTERNAL_PROJECT_ARG}
       -DBUILD_SHARED_LIBS:BOOL=OFF
       -DDCMTK_WITH_DOXYGEN:BOOL=OFF
       -DDCMTK_WITH_ZLIB:BOOL=OFF # see CTK github issue #25
@@ -57,6 +59,8 @@ if(NOT DEFINED DCMTK_DIR AND NOT ${CMAKE_PROJECT_NAME}_USE_SYSTEM_${proj})
       -DDCMTK_WITH_XML:BOOL=OFF  # see CTK github issue #25
       -DDCMTK_WITH_ICONV:BOOL=OFF  # see CTK github issue #178
       -DDCMTK_OVERWRITE_WIN32_COMPILER_FLAGS:BOOL=OFF
+      -DDCMTK_ENABLE_BUILTIN_DICTIONARY:BOOL=ON
+      -DDCMTK_ENABLE_PRIVATE_TAGS:BOOL=ON
       ${EXTERNAL_PROJECT_OPTIONAL_ARGS}
     INSTALL_COMMAND ""
     DEPENDS

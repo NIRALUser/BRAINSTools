@@ -1,3 +1,4 @@
+from __future__ import print_function
 def getProbabilityMapFilename(roiList):
     probabilityMapFilename = {}
     for roi in roiList:
@@ -37,7 +38,7 @@ def unitWorkUp(configurationFilename,
                                       output_names=['probabilityMapFilename'],
                                       function=this.getProbabilityMapFilename)
                                   )
-    filenameGeneratorND.inputs.roiList = roiDict.keys()
+    filenameGeneratorND.inputs.roiList = list(roiDict.keys())
 
     #
     #--------------------------------  start from generate probability

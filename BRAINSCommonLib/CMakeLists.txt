@@ -23,26 +23,12 @@ FindITKUtil( BRAINSCommonLib_ITK
   ITKMetricsv4
   ITKOptimizersv4
   ITKRegionGrowing
+  ITKNrrdIO
 )
 
 #-----------------------------------------------------------------------------
 # Output directories.
 #
-
-## Determine if ITK has MGHIO
-macro(LIST_CONTAINS var value)
-  set(${var})
-  foreach (value2 ${ARGN})
-    if (${value} STREQUAL ${value2})
-      set(${var} TRUE)
-    endif (${value} STREQUAL ${value2})
-  endforeach (value2)
-endmacro(LIST_CONTAINS)
-
-LIST_CONTAINS(ITK_HAS_MGHIO MGHIO ${ITK_MODULES_ENABLED})
-if (NOT ITK_HAS_MGHIO)
-  message(STATUS "WARNING: ITK_MODULES_ENABLED does not contain MGHIO, so programs will not be able to process .mgz formatted files")
-endif()
 
 configure_file("BRAINSToolsVersionConfig.h.in" "BRAINSToolsVersionConfig.h" @ONLY IMMEDIATE)
 install(FILES "${CMAKE_CURRENT_BINARY_DIR}/BRAINSToolsVersionConfig.h"
@@ -147,6 +133,6 @@ install(FILES ${TESTFILES_TO_INSTALL}
 
 ##HACK NEED BETTER TESTS add_directory( TestLargestForegroundFilledMaskImageFilter )
 ##HACK NEED BETTER TESTS add_directory( Test_FindCenterOfBrainFilter )
-if(BUILD_TESTING AND NOT Slicer_BUILD_BRAINSTOOLS)
+if(BUILD_TESTING AND NOT BRAINSTools_DISABLE_TESTING)
   add_subdirectory(TestSuite)
 endif()

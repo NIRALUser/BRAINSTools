@@ -5,13 +5,14 @@
 FindITKUtil(ConvertBetweenFileFormats_ITK
   ITKImageIntensity
   ITKTestKernel
-  ITKVtkGlue)
+  )
 
 if(BUILD_WITH_GUI OR BRAINS3_USE_QT OR BRAINSTools_USE_QT)
+  FINDITKUtil(ITKVtkGlue)
   set(LOCAL_VTKQT vtkGUISupportQt)
-endif()
-FindVTKUtil(vtkRenderingFreeType vtkRenderingOpenGL vtkInteractionStyle
+  FindVTKUtil(vtkInteractionStyle
     vtkRenderingCore  vtkImagingSources ${LOCAL_VTKQT})
+endif()
 
 # This project is intended to be built outside the Insight source tree
 project(ConvertBetweenFileFormats)
@@ -34,7 +35,7 @@ endif(VTK_FOUND)
 
 install_targets(/bin ConvertBetweenFileFormats)
 
-if(BUILD_TESTING AND NOT Slicer_BUILD_BRAINSTOOLS)
+if(BUILD_TESTING AND NOT BRAINSTools_DISABLE_TESTING)
     add_subdirectory(TestSuite)
 endif()
 

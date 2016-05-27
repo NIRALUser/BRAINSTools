@@ -9,6 +9,7 @@ Purpose:       Wrap a convenience function for the BRAINSCut program in Nipype
 Requirements:  <<< Interface specifications >>>
 
 """
+from __future__ import print_function
 from nipype.interfaces.base import (File, TraitedSpec, Interface, CommandLineInputSpec, CommandLine, traits, isdefined)
 import sys
 import os
@@ -104,9 +105,9 @@ class RF12BRAINSCutWrapper(CommandLine):
     """
     _cmd = 'BRAINSCutCMD.py'
     # HACK
-    print "^" * 100
-    print "PYTHON EXEC: ", sys.executable
-    print "VERSION: ", sys.version
+    print("^" * 100)
+    print("PYTHON EXEC: ", sys.executable)
+    print("VERSION: ", sys.version)
     # if sys.version[:2] != '2.7':
     #     raise NotImplementedError
     # END HACK
@@ -119,7 +120,7 @@ class RF12BRAINSCutWrapper(CommandLine):
         return self._outputs_from_inputs(outputs)
 
     def _outputs_from_inputs(self, outputs):
-        for name in outputs.keys():
+        for name in list(outputs.keys()):
             coresponding_input = getattr(self.inputs, name)
             if isdefined(coresponding_input):
                 if isinstance(coresponding_input, bool) and coresponding_input == True:

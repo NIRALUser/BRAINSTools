@@ -26,6 +26,7 @@
 
 #include <cmath>
 #include <cstdlib>
+#include <algorithm>
 
 #include "itkAverageImageFilter.h"
 #include "itkSqrtImageFilter.h"
@@ -52,6 +53,7 @@
 #include "vnl/algo/vnl_determinant.h"
 #include "vnl/vnl_math.h"
 
+#include "BRAINSComputeLabels.h"
 #include "itkBRAINSROIAutoImageFilter.h"
 #include "BRAINSFitUtils.h"
 #ifdef USE_ANTS
@@ -74,54 +76,12 @@
 #include "itkKdTreeGenerator.h"
 #include "itkImageRandomNonRepeatingConstIteratorWithIndex.h"
 
+#include <tbb/mutex.h>
+
 static const FloatingPrecision KNN_InclusionThreshold = 0.85F;
 
 
 ///////////////////////////////////////////////// Posterior computation by kNN //////////////////////////////////////////////
-template <class TInputImage, class TProbabilityImage>
-typename TInputImage::Pointer
-EMSegmentationFilter<TInputImage, TProbabilityImage>
-::NormalizeInputIntensityImage(typename TInputImage::Pointer inputImage)
-{
-  muLogMacro(<< "\nNormalize input intensity images..." << std::endl);
-
-  typedef typename itk::Statistics::ImageToHistogramFilter<TInputImage>   HistogramFilterType;
-  typedef typename HistogramFilterType::InputBooleanObjectType            InputBooleanObjectType;
-  typedef typename HistogramFilterType::HistogramSizeType                 HistogramSizeType;
-
-  HistogramSizeType histogramSize( 1 );
-  histogramSize[0] = 256;
-
-  typename InputBooleanObjectType::Pointer autoMinMaxInputObject = InputBooleanObjectType::New();
-  autoMinMaxInputObject->Set( true );
-
-  typename HistogramFilterType::Pointer histogramFilter = HistogramFilterType::New();
-  histogramFilter->SetInput( inputImage );
-  histogramFilter->SetAutoMinimumMaximumInput( autoMinMaxInputObject );
-  histogramFilter->SetHistogramSize( histogramSize );
-  histogramFilter->SetMarginalScale( 10.0 );
-  histogramFilter->Update();
-
-  float lowerValue = histogramFilter->GetOutput()->Quantile( 0, 0 );
-  float upperValue = histogramFilter->GetOutput()->Quantile( 0, 1 );
-
-  typedef typename itk::IntensityWindowingImageFilter<TInputImage, TInputImage> IntensityWindowingImageFilterType;
-  typename IntensityWindowingImageFilterType::Pointer windowingFilter = IntensityWindowingImageFilterType::New();
-  windowingFilter->SetInput( inputImage );
-  windowingFilter->SetWindowMinimum( lowerValue );
-  windowingFilter->SetWindowMaximum( upperValue );
-  windowingFilter->SetOutputMinimum( 0 );
-  windowingFilter->SetOutputMaximum( 1 );
-  windowingFilter->Update();
-
-  typename TInputImage::Pointer outputImage = ITK_NULLPTR;
-  outputImage = windowingFilter->GetOutput();
-  outputImage->Update();
-  outputImage->DisconnectPipeline();
-
-  return outputImage;
-}
-
 template <class TInputImage, class TProbabilityImage>
 void
 EMSegmentationFilter<TInputImage, TProbabilityImage>
@@ -138,7 +98,7 @@ EMSegmentationFilter<TInputImage, TProbabilityImage>
 
     // represent each class label as an array
   vnl_matrix<FloatingPrecision> localLabels(numTraining, numClasses, 0);
-  for( unsigned int iTrain = 0; iTrain < numTraining; ++iTrain )
+  for( size_t iTrain = 0; iTrain < numTraining; ++iTrain )
     {
     localLabels( iTrain, labelVector(iTrain) ) = 1;
     }
@@ -151,50 +111,62 @@ EMSegmentationFilter<TInputImage, TProbabilityImage>
   treeGenerator->SetBucketSize( 16 );
   treeGenerator->Update();
 
-  TreeType::Pointer tree = treeGenerator->GetOutput();
+  TreeType::ConstPointer tree = treeGenerator->GetOutput().GetPointer();
 
   // Compute Likelihood matrix
-  for( unsigned int iTest = 0; iTest < numTest; ++iTest ) ///////
-    {
-    // each test case is a query point
-    MeasurementVectorType queryPoint;
-    for(unsigned int i=0; i<numFeatures; ++i)
-       {
-       queryPoint.push_back( testMatrix(iTest,i) );
-       }
+  // Limit the number of threads to limit memory usage
+  const size_t maxNumThreads = itk::MultiThreader::GetGlobalDefaultNumberOfThreads();
+  const float baseMemoryNeeded = 11.0; //10GB needed
+  //Assume 2GB per thread is available
+  const signed int threadsToUse = std::max<signed int>( 1, ( maxNumThreads*2.0 - baseMemoryNeeded )/2.0 );
+  // i.e. 10 cores = 20GB available - 10 base requireed= 10/2 = 5 threads can run.
+  const size_t minGrainSize = numTest/threadsToUse;
+  tbb::parallel_for(tbb::blocked_range<size_t>(0,numTest,minGrainSize),
+    [=,&liklihoodMatrix](const tbb::blocked_range<size_t> &r) {
 
-    // compute the distances
-    typename TreeType::InstanceIdentifierVectorType neighbors;
-    std::vector<double> distances;
-    tree->Search( queryPoint, K, neighbors, distances );
+      // each test case is a query point
+      MeasurementVectorType queryPoint( numFeatures );
+      // Now we should find K labels correspondence to K neighbors
+      vnl_matrix<FloatingPrecision> neighborLabels( K, numClasses);
+      // Weight vector
+      vnl_matrix<FloatingPrecision> weights(1,K,0);
 
-    // Now we should find K labels correspondence to K neighbors
-    vnl_matrix<FloatingPrecision> neighborLabels( K, numClasses);
-    // Weight vector
-    vnl_matrix<FloatingPrecision> weights(1,K,0);
-    FloatingPrecision sumOfWeights = 0;
-
-    for( unsigned int n = 0; n < K; ++n )
-      {
-      // Labels of the K neighbors
-      neighborLabels.set_row( n, localLabels.get_row( neighbors[n] ) );
-      //  Compute Weights and sum of weights
-      FloatingPrecision distSqr = pow( distances[n], 2);
-      if( distSqr == 0 )
+      // compute the distances
+      typename TreeType::InstanceIdentifierVectorType neighbors;
+      std::vector<double> distances(K);
+      for( size_t iTest = r.begin(); iTest < r.end(); ++iTest ) ///////
         {
-        weights(0,n) = 1; // avoids inf weights
-        }
-      else
-        {
-        weights(0,n) = 1/distSqr;
-        }
-      sumOfWeights += weights(0,n);
-      }
-    weights = weights / sumOfWeights;
+        for( size_t i = 0; i < numFeatures; ++i)
+           {
+           queryPoint[i] = testMatrix(iTest,i);
+           }
 
-    vnl_matrix<FloatingPrecision> likelihoodRow = weights * neighborLabels; // a 1xC vector
-    liklihoodMatrix.set_row(iTest, likelihoodRow.get_row(0) );
-    } // end of main loop
+        tree->Search( queryPoint, K, neighbors, distances );
+
+        FloatingPrecision sumOfWeights = 0;
+        for( size_t n = 0; n < K; ++n )
+          {
+          // Labels of the K neighbors
+          neighborLabels.set_row( n, localLabels.get_row( neighbors[n] ) );
+          //  Compute Weights and sum of weights
+          const FloatingPrecision distSqr = std::pow( distances[n], 2);
+          if( distSqr == 0 )
+            {
+            weights(0,n) = 1; // avoids inf weights
+            }
+          else
+            {
+            weights(0,n) = 1/distSqr;
+            }
+          sumOfWeights += weights(0,n);
+          }
+        weights = weights / sumOfWeights;
+
+        // (weights * neighborLabels) is a 1xC vector
+        liklihoodMatrix.set_row(iTest, (weights * neighborLabels).get_row(0) );
+        } // end of main loop
+  });// End parallel_for
+
   muLogMacro(<< "\n--------------------------------" << std::endl);
   muLogMacro(<< "LiklihoodMatrix is calculated: [ " << liklihoodMatrix.rows() << " x " << liklihoodMatrix.cols() << " ]" << std::endl);
   muLogMacro(<< "--------------------------------" << std::endl);
@@ -212,20 +184,24 @@ EMSegmentationFilter<TInputImage, TProbabilityImage>
   post->Allocate();
 
   const typename TProbabilityImage::SizeType size = post->GetLargestPossibleRegion().GetSize();
+  const LOOPITERTYPE pageSize=size[1]*size[0];
 
-  unsigned int vindex = 0;
-  for( LOOPITERTYPE kk = 0; kk < (LOOPITERTYPE)size[2]; kk++ )
-    {
-    for( LOOPITERTYPE jj = 0; jj < (LOOPITERTYPE)size[1]; jj++ )
-      {
-      for( LOOPITERTYPE ii = 0; ii < (LOOPITERTYPE)size[0]; ii++ )
-        {
-        const typename TProbabilityImage::IndexType currIndex = {{ii, jj, kk}};
-        post->SetPixel(currIndex, vector(vindex) );
-        ++vindex;
-        }
-      }
-    }
+  tbb::parallel_for(tbb::blocked_range3d<LOOPITERTYPE>(0,size[2],1,
+                                                       0,size[1],size[1]/2,
+                                                       0,size[0],512),
+                    [=,&post](const tbb::blocked_range3d<LOOPITERTYPE> &r) {
+                      for (LOOPITERTYPE kk = r.pages().begin(); kk < r.pages().end(); ++kk) {
+                        const LOOPITERTYPE pageOffset = kk*pageSize;
+                        for (LOOPITERTYPE jj = r.rows().begin(); jj < r.rows().end(); ++jj) {
+                          const LOOPITERTYPE pageRowOffset = pageOffset + jj*size[0];
+                          for (LOOPITERTYPE ii = r.cols().begin(); ii < r.cols().end(); ++ii) {
+                            const typename TProbabilityImage::IndexType currIndex = {{ii, jj, kk}};
+                            const LOOPITERTYPE  v_index_offset = pageRowOffset+ii;
+                            post->SetPixel(currIndex, vector(v_index_offset));
+                          }
+                        }
+                      }
+                    });
   return post;
 }
 
@@ -235,37 +211,49 @@ EMSegmentationFilter<TInputImage, TProbabilityImage>
 ::ComputekNNPosteriors(const ProbabilityImageVectorType & Priors,
                        const MapOfInputImageVectors & intensityImages, // input corrected images
                        ByteImagePointer & labelsImage,
-                       const IntVectorType & labelClasses)
+                       const IntVectorType & labelClasses,
+                       const std::vector<bool> & priorIsForegroundPriorVector)
 
 {
-  // Phase 1: create train sample set, label vector, and the test matrix
-  // Phase 2: pass the above vectors to the "dokNNClassification" function
+  // Phase 1: create train sample set, label vector, and the test matrix.
+  // Phase 2: pass the above vectors to the "kNNCore" function to create likelihood matrix.
+  // Phase 3: create each posterior image from a column of likelihood matrix using "assignVectorToImage" function.
 
-  const unsigned int numClasses = Priors.size();
+  const size_t numClasses = Priors.size();
   muLogMacro(<< "Number of posteriors classes (label codes): " << numClasses << "(" << labelClasses.size() << ")" << std::endl);
 
   // change the map of input image vectors to a probability image vector type
-  typedef std::vector<InputImagePointer>       InputImageVectorType;
-  InputImageVectorType                         inputImagesVector;
+  InputImageVector                         inputImagesVector;
+  InputImageInterpolatorVector             inputImageNNInterpolatorsVector;
 
   for(typename MapOfInputImageVectors::const_iterator mapIt = intensityImages.begin();
       mapIt != intensityImages.end();
       ++mapIt)
     {
-    const double numCurModality = static_cast<double>(mapIt->second.size());
+    const size_t numCurModality = mapIt->second.size();
+    muLogMacro(<< "Number of modality images for (" << mapIt->first << ") is: " << numCurModality << std::endl);
+
     for(unsigned m = 0; m < numCurModality; ++m)
       {
       // Normalize the input images since the priors are normalized already
-      inputImagesVector.push_back( NormalizeInputIntensityImage( mapIt->second[m] ) );
+      InputImagePointer normalizedInputImage = NormalizeInputIntensityImage<InputImageType>( mapIt->second[m] );
+      // Set the normalized input image into the input images vector
+      inputImagesVector.push_back( normalizedInputImage );
+      // create a vector of input image interpolators for evaluation of image values in physical space
+      typename InputImageNNInterpolationType::Pointer inputImageInterp =
+        InputImageNNInterpolationType::New();
+      inputImageInterp->SetInputImage( normalizedInputImage );
+      inputImageNNInterpolatorsVector.push_back( inputImageInterp );
       }
     }
 
-  const unsigned int numOfInputImages = inputImagesVector.size();
-  muLogMacro(<< "Number of input images: " << numOfInputImages << std::endl);
+  const size_t numOfInputImages = inputImagesVector.size();
+  muLogMacro(<< "Number of total input images: " << numOfInputImages << std::endl);
 
   const size_t KNN_SamplesPerLabel = 75;//std::min<size_t>(minLabelCount,75);
 
-  // set train sample set and the label vector by picking samples from label image.
+  // Set train sample set and the label vector by picking samples from label image.
+  // Make sure each train sample is chosen from pure plugs
   //
   const size_t numberOfSamples = numClasses * KNN_SamplesPerLabel;
 
@@ -278,6 +266,13 @@ EMSegmentationFilter<TInputImage, TProbabilityImage>
     {
     SampledLabelsMap[ labelClasses[i] ].reserve(KNN_SamplesPerLabel);
     reverseLabelToIndex[ labelClasses[i] ] = i;
+    }
+
+  typename MaskNNInterpolationType::Pointer purePlugsMaskInterp = ITK_NULLPTR;
+  if( m_UsePurePlugs && m_PurePlugsMask.IsNotNull() )
+    {
+    purePlugsMaskInterp = MaskNNInterpolationType::New();
+    purePlugsMaskInterp->SetInputImage( this->m_PurePlugsMask.GetPointer() );
     }
 
   // randomly iterate through the label image
@@ -296,8 +291,29 @@ EMSegmentationFilter<TInputImage, TProbabilityImage>
     if( currLabelCode != 99   && SampledLabelsMap[ currLabelCode ].size() < KNN_SamplesPerLabel )
       {
       const typename ByteImageType::IndexType currentIndex = NRit.GetIndex();
-      SampledLabelsMap[ currLabelCode ].push_back( currentIndex );
-      ++sampleCount;
+
+      // Now check whether the currentIndex belongs to a pure plug or not.
+      bool isPure = true;
+      if( m_UsePurePlugs && purePlugsMaskInterp.IsNotNull() )
+        {
+        ByteImageType::PointType physicalSamplePoint;
+        labelsImage->TransformIndexToPhysicalPoint( currentIndex, physicalSamplePoint );
+        if( purePlugsMaskInterp->IsInsideBuffer( physicalSamplePoint ) )
+          {
+          isPure = bool( purePlugsMaskInterp->Evaluate( physicalSamplePoint ) );
+          }
+        else
+          {
+          isPure = false;
+          }
+        }
+
+      if( isPure ) // To keep legacy behaviour, this flag is always true if "m_UsePurePlugs" is false.
+                   // However, when m_UsePurePlugs is true, only pure samples will be used for training.
+        {
+        SampledLabelsMap[ currLabelCode ].push_back( currentIndex );
+        ++sampleCount;
+        }
       }
     ++NRit;
     }
@@ -308,18 +324,20 @@ EMSegmentationFilter<TInputImage, TProbabilityImage>
       {
       if( SampledLabelsMap[ labelClasses[i] ].size() < KNN_SamplesPerLabel )
         {
-        muLogMacro(<<"WARNING: There is not enough samples for all label codes." << std::endl );
+        muLogMacro(<<"WARNING: Not enough samples for label class: " << labelClasses[i]
+                   << ". Only " << SampledLabelsMap[ labelClasses[i] ].size() << " samples were picked. "
+                   << KNN_SamplesPerLabel << " needed!" << std::endl );
         }
       }
     }
 
   vnl_vector<FloatingPrecision> labelVector(numberOfSamples);
-  muLogMacro(<< "\n* Computing the label vector with " << numberOfSamples << " samples..." << std::endl);
+  muLogMacro(<< "\n* Creating \"label vector\" with " << numberOfSamples << " samples..." << std::endl);
 
   // set kNN train sample set. it has #numberOfSamples training cases with (#numOfInputImages + #numClasses) features
   muLogMacro(<< "\n* Computing train matrix as a list of samples" << std::endl);
   SampleType::Pointer trainSampleSet = SampleType::New();
-  trainSampleSet->SetMeasurementVectorSize( numOfInputImages + labelClasses.size() ); // Feature space has 2+15 elements
+  trainSampleSet->SetMeasurementVectorSize( numOfInputImages + labelClasses.size() ); // Feature space elements
 
    // NOW PROCESS ALL ELEMENTS OF THE std::Map SampledLabelsMap
    unsigned int rowIndx = 0;
@@ -337,20 +355,67 @@ EMSegmentationFilter<TInputImage, TProbabilityImage>
                                    << numberOfSamples << std::endl );
          }
 
-       // Fill the corresponding row of the train matrix with the values of feature space in the sampled voxel
-       MeasurementVectorType mv;
-       for( typename InputImageVectorType::const_iterator inIt = inputImagesVector.begin();
-            inIt != inputImagesVector.end();
-            ++inIt ) // First features are from input images (usually two T1 and T2 images)
+       // Fill the corresponding row of the train matrix with the values of feature space at the sampled index location
+       MeasurementVectorType mv( numOfInputImages + labelClasses.size() );
+       MeasurementVectorType::SizeValueType mvIndx = 0;
+       //
+       // First features are from input images (e.g. T1, T2, etc images)
+       // Input images are aligned in physical space, but they don't necessary
+       // have the same voxel lattice, so the current index should be transformed
+       // to a physical point, and the image values should be evaluated in physical location.
+       //
+       ByteImageType::PointType currPoint;
+       labelsImage->TransformIndexToPhysicalPoint( *vit, currPoint );
+
+       for( typename InputImageInterpolatorVector::const_iterator interpIt = inputImageNNInterpolatorsVector.begin();
+            interpIt != inputImageNNInterpolatorsVector.end();
+            ++interpIt )
          {
-         mv.push_back( inIt->GetPointer()->GetPixel( *vit ) );
+         // evluate the value of the input image at the current physical location
+         // via a nearest neighbor interpolator
+         if( interpIt->GetPointer()->IsInsideBuffer( currPoint ) )
+           {
+           mv[mvIndx] = interpIt->GetPointer()->Evaluate( currPoint );
+           }
+         else
+           {
+           mv[mvIndx] = 0;
+           }
+         ++mvIndx;
          }
-       for( unsigned int c_indx = 0; c_indx<labelClasses.size() ; ++c_indx) // Add 15 more features from posteriors
+
+       // Here we find out that the prior with maximum value belongs to background or foreground
+       double maxPriorClassValue = Priors[0]->GetPixel( *vit );
+       unsigned int       indexMaxPosteriorClassValue = 0;
+       for( unsigned int iclass = 1; iclass < labelClasses.size() ; ++iclass)
+         {
+         const double currentPriorClassValue = Priors[iclass]->GetPixel( *vit );
+         if( currentPriorClassValue > maxPriorClassValue )
+           {
+           maxPriorClassValue = currentPriorClassValue;
+           indexMaxPosteriorClassValue = iclass;
+           }
+         }
+       bool fgflag = priorIsForegroundPriorVector[indexMaxPosteriorClassValue];
+
+       // Other features are from input priors.
+       // Since input priors have the same voxel lattice as input thresholded label map,
+       // we can evaluate the priors value directly at index location.
+       //
+       for( unsigned int c_indx = 0; c_indx<labelClasses.size() ; ++c_indx) // Add 15 more features from priors (EM posteriors)
          {
          //mv.push_back( Priors[c_indx]->GetPixel( *vit ) );
-         mv.push_back( (  Priors[c_indx]->GetPixel( *vit ) > 0.01 ) ? 1 : 0 );
+         // foreground and background classes should be added exclusively
+         mv[mvIndx] = (  Priors[c_indx]->GetPixel( *vit ) > 0.01 &&
+                         priorIsForegroundPriorVector[c_indx] == fgflag ) ? 1 : 0;
+         ++mvIndx;
          }
        trainSampleSet->PushBack( mv );
+       if( mvIndx != (numOfInputImages + labelClasses.size()) )
+         {
+         itkGenericExceptionMacro( << "Error: Measurement vector size exceeds the feature space size."
+                                   << std::endl );
+         }
        }
      }
 
@@ -369,6 +434,9 @@ EMSegmentationFilter<TInputImage, TProbabilityImage>
   muLogMacro(<< "\nTrain matrix is created using " << trainSampleSet->Size() << " samples, ");
   muLogMacro(<< "having feature space size of: " << trainSampleSet->GetMeasurementVectorSize() << std::endl);
 
+  //||||||||||
+  // HACK(ALI) TODO: FIX the debugging csv file
+  //||||||||||
   // DEBUGGING: Write csv file
   {
   const bool generateLogScript = true; //HACK:  SHOULD BE FALSE EVENTUALLY
@@ -402,37 +470,71 @@ EMSegmentationFilter<TInputImage, TProbabilityImage>
   //////
 
   // set kNN input test matrix of size : #OfVoxels x #OfInputImages
-  const typename InputImageType::SizeType size = inputImagesVector[0]->GetLargestPossibleRegion().GetSize();
-  unsigned int numOfVoxels = inputImagesVector[0]->GetLargestPossibleRegion().GetNumberOfPixels();
-
+  unsigned int numOfVoxels = GetMapVectorFirstElement(intensityImages)->GetLargestPossibleRegion().GetNumberOfPixels();
   muLogMacro(<< "\n* Computing test matrix ( " << numOfVoxels << " x " << numOfInputImages + labelClasses.size() << " )" << std::endl);
   vnl_matrix<FloatingPrecision> testMatrix( numOfVoxels, numOfInputImages+labelClasses.size() );
 
-  unsigned int rowIndex = 0;
-  for( LOOPITERTYPE kk = 0; kk < (LOOPITERTYPE)size[2]; kk++ )
-    {
-    for( LOOPITERTYPE jj = 0; jj < (LOOPITERTYPE)size[1]; jj++ )
-      {
-      for( LOOPITERTYPE ii = 0; ii < (LOOPITERTYPE)size[0]; ii++ )
-        {
-        const typename InputImageType::IndexType currIndex = {{ii, jj, kk}};
-        unsigned int colIndex = 0;
-        typename ProbabilityImageVectorType::const_iterator inIt = inputImagesVector.begin();
-        while( ( inIt != inputImagesVector.end() ) && ( colIndex < numOfInputImages ) )
-          {
-          testMatrix(rowIndex,colIndex) = inIt->GetPointer()->GetPixel( currIndex ); // set first two cols from T1 and T2
-          ++colIndex;
-          ++inIt;
-          }
-        while( colIndex-numOfInputImages < labelClasses.size() ) // Add 15 more features from posteriors
-          {
-          testMatrix(rowIndex,colIndex) = ( Priors[colIndex-numOfInputImages]->GetPixel( currIndex ) > 0.01 ) ? 1 : 0 ;
-          ++colIndex;
-          }
-        ++rowIndex;
-        }
-      }
-    }
+  const typename InputImageType::SizeType size = GetMapVectorFirstElement(intensityImages)->GetLargestPossibleRegion().GetSize();
+  const LOOPITERTYPE pageSize=size[1]*size[0];
+
+  tbb::parallel_for(tbb::blocked_range3d<LOOPITERTYPE>(0,size[2],1,
+                                                       0,size[1],size[1]/2,
+                                                       0,size[0],512),
+                    [=,&testMatrix](const tbb::blocked_range3d<LOOPITERTYPE> &r) {
+                      for (LOOPITERTYPE kk = r.pages().begin(); kk < r.pages().end(); ++kk) {
+                        const LOOPITERTYPE pageOffset = kk * pageSize;
+                        for (LOOPITERTYPE jj = r.rows().begin(); jj < r.rows().end(); ++jj) {
+                          const LOOPITERTYPE pageRowOffset = pageOffset + jj * size[0];
+                          for (LOOPITERTYPE ii = r.cols().begin(); ii < r.cols().end(); ++ii) {
+                            const typename InputImageType::IndexType currTestIndex = {{ii, jj, kk}};
+                            const LOOPITERTYPE rowIndex = pageRowOffset + ii;
+                            // Here we find out that the prior, with maximum value at the current index, belongs to background or foreground
+                            double maxPriorClassValue = Priors[0]->GetPixel(currTestIndex);
+                            unsigned int indexMaxPosteriorClassValue = 0;
+                            for (unsigned int iclass = 1; iclass < labelClasses.size(); ++iclass) {
+                              const double currentPriorClassValue = Priors[iclass]->GetPixel(currTestIndex);
+                              if (currentPriorClassValue > maxPriorClassValue) {
+                                maxPriorClassValue = currentPriorClassValue;
+                                indexMaxPosteriorClassValue = iclass;
+                              }
+                            }
+                            bool fgflag = priorIsForegroundPriorVector[indexMaxPosteriorClassValue];
+
+                            // convert current test index to physical point
+                            typename InputImageType::PointType currTestPoint;
+                            GetMapVectorFirstElement(intensityImages)->TransformIndexToPhysicalPoint(currTestIndex,
+                                                                                                     currTestPoint);
+
+                            unsigned int colIndex = 0;
+                            typename InputImageInterpolatorVector::const_iterator interpIt = inputImageNNInterpolatorsVector.begin();
+                            while ((interpIt != inputImageNNInterpolatorsVector.end()) &&
+                                   (colIndex < numOfInputImages)) {
+                              // input images are aligned in physical space but not necessarily in voxel space
+                              // set first few colmuns from input images
+                              if (interpIt->GetPointer()->IsInsideBuffer(currTestPoint)) {
+                                testMatrix(rowIndex, colIndex) = interpIt->GetPointer()->Evaluate(currTestPoint);
+                              }
+                              else {
+                                testMatrix(rowIndex, colIndex) = 0;
+                              }
+                              ++colIndex;
+                              ++interpIt;
+                            }
+                            // foreground and background classes should be added exclusively
+                            while (colIndex - numOfInputImages < labelClasses.size()) // Add 15 more features from EM posteriors
+                            {
+                              // first input image and posteriors are in the same voxel space
+                              testMatrix(rowIndex, colIndex) = (Priors[colIndex - numOfInputImages]->GetPixel(
+                                  currTestIndex) > 0.01 &&
+                                                                priorIsForegroundPriorVector[colIndex -
+                                                                                             numOfInputImages] ==
+                                                                fgflag) ? 1 : 0;
+                              ++colIndex;
+                            }
+                          }
+                        }
+                      }
+                    });
 
   const unsigned int K = std::min<size_t>(KNN_SamplesPerLabel*0.80, 100); // Number of neighbours
   // each column of the memberShip matrix contains the voxel values of a posterior image.
@@ -473,13 +575,13 @@ EMSegmentationFilter<TInputImage, TProbabilityImage>
 
   const typename InputImageType::SizeType finalPosteriorSize = Posteriors[0]->GetLargestPossibleRegion().GetSize();
   muLogMacro(<< "Size of return posteriors: " << finalPosteriorSize  << std::endl);
-
+  /*
   typedef itk::ImageFileWriter<TProbabilityImage> PostImageWriterType;
   typename PostImageWriterType::Pointer posetriorwriter = PostImageWriterType::New();
   posetriorwriter->SetInput(Posteriors[14]);
   posetriorwriter->SetFileName("DEBUG_WHITE_MATTER.nii.gz");
   posetriorwriter->Update();
-
+  */
   return Posteriors;
 }
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -543,6 +645,15 @@ EMSegmentationFilter<TInputImage, TProbabilityImage>
   m_AtlasTransformType = "SyN"; // "invalid_TransformationTypeNotSet";
 
   m_UseKNN = false;
+
+  m_UsePurePlugs = false;
+  m_PurePlugsThreshold = 0.2;
+
+  m_NumberOfSubSamplesInEachPlugArea[0] = 0;
+  m_NumberOfSubSamplesInEachPlugArea[1] = 0;
+  m_NumberOfSubSamplesInEachPlugArea[2] = 0;
+
+  m_PurePlugsMask = ITK_NULLPTR;
 
   m_UpdateTransformation = false;
 
@@ -638,14 +749,6 @@ EMSegmentationFilter<TInputImage, TProbabilityImage>
         itkExceptionMacro(<< "InputImage ["
                           << mapIt->first << " " << std::distance(mapIt->second.begin(),imIt)
                           << "] has invalid dimension: only supports 3D images" << std::endl );
-        }
-      const InputImageSizeType isize = (*imIt)->GetLargestPossibleRegion().GetSize();
-      if( size != isize )
-        {
-        itkExceptionMacro(<< "Image data ["
-                          << mapIt->first << " " << std::distance(mapIt->second.begin(),imIt)
-                          << "] 3D size mismatch "
-                          << size << " != " << isize << "." << std::endl );
         }
       }
     }
@@ -1011,18 +1114,49 @@ EMSegmentationFilter<TInputImage, TProbabilityImage>
 ::ComputeDistributions(const ByteImageVectorType & SubjectCandidateRegions,
                        const ProbabilityImageVectorType & probAllDistributions)
 {
-  // IPEK This may be the only place where the images grouped by type are
-  // needed for computation.
-  muLogMacro(<< "Computing Distributions" << std::endl );
+  std::cout << "\n^^^^^^^^^^^^^^^^^^^^^^^^^^^" << std::endl;
+  muLogMacro(<< "Computing Distributions..." << std::endl );
+  std::cout << "^^^^^^^^^^^^^^^^^^^^^^^^^^^" << std::endl;
   const ProbabilityImageVectorType & probabilityMaps = probAllDistributions;
 
-  std::vector<RegionStats> outputStats;
+  std::vector<RegionStats>             outputStats;
+  std::vector<ByteImageType::Pointer>  distributionsCandidateRegions;
 
-  // IPEK CombinedComputeDistributions is also used by
-  // LLSBiasCorrector which unfortunately does NOT keep track of the
-  // types of input images.  So there may need to be a custom version
-  // of this method that groups by image type
-  CombinedComputeDistributions<TInputImage, TProbabilityImage, MatrixType>(SubjectCandidateRegions,
+  // resample the PurePlugsMask to the voxel lattice of the CandidateRegions
+  ByteImagePointer resampledPurePlugsMask = ITK_NULLPTR;
+  if( this->m_UsePurePlugs && this->m_PurePlugsMask.IsNotNull() )
+    {
+    resampledPurePlugsMask =
+      ResampleImageWithIdentityTransform<ByteImageType>( "NearestNeighbor",
+                                                        0,
+                                                        this->m_PurePlugsMask.GetPointer(),
+                                                        SubjectCandidateRegions[0].GetPointer() );
+    }
+
+  const unsigned int  numClasses = SubjectCandidateRegions.size();
+  for( size_t iclass = 0; iclass < numClasses; iclass++ )
+    {
+    if( this->m_UsePurePlugs && resampledPurePlugsMask.IsNotNull() )
+      {
+      // Multiply each SubjectCandidateRegion to the resampledPurePlugsMask,
+      // since only pure samples should be used for distributions computations.
+      typedef itk::MultiplyImageFilter<ByteImageType, ByteImageType>
+        MultiplyImageFilterType;
+      typename MultiplyImageFilterType::Pointer multiplyFilter
+        = MultiplyImageFilterType::New();
+      multiplyFilter->SetInput1( resampledPurePlugsMask );
+      multiplyFilter->SetInput2( SubjectCandidateRegions[iclass] );
+      multiplyFilter->Update();
+
+      distributionsCandidateRegions.push_back( multiplyFilter->GetOutput() );
+      }
+    else
+      {
+      distributionsCandidateRegions.push_back( SubjectCandidateRegions[iclass] );
+      }
+    }
+
+  CombinedComputeDistributions<TInputImage, TProbabilityImage, MatrixType>(distributionsCandidateRegions,
                                                                            this->m_CorrectedImages,
                                                                            probabilityMaps,
                                                                            outputStats,
@@ -1068,7 +1202,7 @@ EMSegmentationFilter<TInputImage, TProbabilityImage>
 
   // Normalizing constant for the Gaussian
   const FloatingPrecision denom =
-    vcl_pow(2 * vnl_math::pi, numModalities / 2.0) * vcl_sqrt(detcov) + vnl_math::eps;
+    std::pow(2 * vnl_math::pi, numModalities / 2.0) * std::sqrt(detcov) + vnl_math::eps;
   const FloatingPrecision invdenom = 1.0 / denom;
   CHECK_NAN(invdenom, __FILE__, __LINE__, "\n  denom:" << denom );
   const MatrixType invcov = MatrixInverseType(currCovariance);
@@ -1078,88 +1212,114 @@ EMSegmentationFilter<TInputImage, TProbabilityImage>
   post->SetRegions(prior->GetLargestPossibleRegion() );
   post->Allocate();
 
-  const typename TProbabilityImage::SizeType size = post->GetLargestPossibleRegion().GetSize();
-
-#if defined(LOCAL_USE_OPEN_MP)
-#pragma omp parallel for
-#endif
-  for( LOOPITERTYPE kk = 0; kk < (LOOPITERTYPE)size[2]; kk++ )
+  // create a map of input image interpolators
+  MapOfInputImageInterpolatorVectors inputImageNNInterpolatorsList;
+  for(typename MapOfInputImageVectors::const_iterator mapIt = intensityImages.begin();
+      mapIt != intensityImages.end();
+      ++mapIt)
     {
-    for( LOOPITERTYPE jj = 0; jj < (LOOPITERTYPE)size[1]; jj++ )
+    const size_t numCurModality = mapIt->second.size();
+    for(unsigned m = 0; m < numCurModality; ++m)
       {
-      for( LOOPITERTYPE ii = 0; ii < (LOOPITERTYPE)size[0]; ii++ )
-        {
-        const typename TProbabilityImage::IndexType currIndex = {{ii, jj, kk}};
-        // At a minimum, every class has at least a 0.001% chance of being
-        // true no matter what.
-        // I realize that this small value makes the priors equal slightly
-        // larger than 100%, but everything
-        // is renormalized anyway, so it is not really that big of a deal as
-        // long as the main priors for
-        // the desired class is significantly higher than 1%.
-        const typename TProbabilityImage::PixelType minPriorValue = 0.0;
-        const typename TProbabilityImage::PixelType priorValue = (prior->GetPixel(currIndex) + minPriorValue);
-        // MatrixType X(numModalities, 1);
-        // {
-        // for(typename RegionStats::MeanMapType::const_iterator mapIt = currMeans.begin();
-        //     mapIt != currMeans.end(); ++mapIt)
-        //   {
-        //   for(typename RegionStats::VectorType::const_iterator vecIt = mapIt->second.begin();
-        //       vecIt != mapIt->second.end(); ++vecIt, ++ichan)
-        //     {
-        //     X(ichan, 0) =
-        //       tmpIntensityImages[ichan]->GetPixel(currIndex) - (*vecIt);
-        //     }
-        //   }
-        // }
+      typename InputImageNNInterpolationType::Pointer inputImageInterp =
+          InputImageNNInterpolationType::New();
+      inputImageInterp->SetInputImage( mapIt->second[m].GetPointer() );
 
-        MatrixType X(numModalities, 1);
-        unsigned long zz = 0;
-        for(typename MapOfInputImageVectors::const_iterator mapIt = intensityImages.begin();
-            mapIt != intensityImages.end(); ++mapIt, ++zz)
-          {
-          double curAvg(0.0);
-          const double curMean = currMeans[mapIt->first];
-          const double numCurModality = static_cast<double>(mapIt->second.size());
-          for(unsigned xx = 0; xx < numCurModality; ++xx)
-            {
-            curAvg += (mapIt->second[xx]->GetPixel(currIndex) - curMean);
-            }
-          X(zz,0) = curAvg / numCurModality;
-          }
-
-        const MatrixType  Y = invcov * X;
-        FloatingPrecision mahalo = 0.0;
-        for(unsigned int ichan = 0; ichan < numModalities; ichan++ )
-          {
-          const FloatingPrecision & currVal = X(ichan, 0) * Y(ichan, 0);
-          CHECK_NAN(currVal, __FILE__, __LINE__, "\n  currIndex: " << currIndex
-                    << "\n  mahalo: " << mahalo
-                    << "\n  ichan: " << ichan
-                    << "\n  invcov: " << invcov
-                    << "\n  X:  " << X
-                    << "\n  Y:  " << Y );
-          mahalo += currVal;
-          }
-
-        // Note:  This is the maximum likelyhood estimate as described in
-        // formula at bottom of
-        //       http://en.wikipedia.org/wiki/Maximum_likelihood_estimation
-        const FloatingPrecision likelihood = vcl_exp(-0.5 * mahalo) * invdenom;
-
-        const typename TProbabilityImage::PixelType currentPosterior =
-          static_cast<typename TProbabilityImage::PixelType>( (priorScale * priorValue * likelihood) );
-        CHECK_NAN(currentPosterior, __FILE__, __LINE__, "\n  currIndex: " << currIndex
-                  << "\n  priorScale: " << priorScale << "\n  priorValue: " << priorValue
-                  << "\n  likelihood: " << likelihood
-                  << "\n  mahalo: " << mahalo
-                  << "\n  invcov: " << invcov
-                  << "\n  X:  " << X
-                  << "\n  Y:  " << Y );
-        post->SetPixel(currIndex, currentPosterior);
-        }
+      inputImageNNInterpolatorsList[mapIt->first].push_back( inputImageInterp );
       }
     }
+
+  const typename TProbabilityImage::SizeType size = post->GetLargestPossibleRegion().GetSize();
+
+  tbb::parallel_for(tbb::blocked_range3d<LOOPITERTYPE>(0,size[2],1,
+                                                       0,size[1],size[1]/2,
+                                                       0,size[0],512),
+                    [=](const tbb::blocked_range3d<LOOPITERTYPE> &r) {
+                      for (LOOPITERTYPE kk = r.pages().begin(); kk < r.pages().end(); ++kk) {
+                        for (LOOPITERTYPE jj = r.rows().begin(); jj < r.rows().end(); ++jj) {
+                          for (LOOPITERTYPE ii = r.cols().begin(); ii < r.cols().end(); ++ii) {
+                            const typename TProbabilityImage::IndexType currIndex = {{ii, jj, kk}};
+                            // transform posterior image index to physical point
+                            typename TProbabilityImage::PointType currPoint;
+                            post->TransformIndexToPhysicalPoint(currIndex, currPoint);
+
+                            // At a minimum, every class has at least a 0.001% chance of being
+                            // true no matter what.
+                            // I realize that this small value makes the priors equal slightly
+                            // larger than 100%, but everything
+                            // is renormalized anyway, so it is not really that big of a deal as
+                            // long as the main priors for
+                            // the desired class is significantly higher than 1%.
+                            const typename TProbabilityImage::PixelType minPriorValue = 0.0;
+                            const typename TProbabilityImage::PixelType priorValue = (prior->GetPixel(currIndex) +
+                                                                                      minPriorValue);
+                            // MatrixType X(numModalities, 1);
+                            // {
+                            // for(typename RegionStats::MeanMapType::const_iterator mapIt = currMeans.begin();
+                            //     mapIt != currMeans.end(); ++mapIt)
+                            //   {
+                            //   for(typename RegionStats::VectorType::const_iterator vecIt = mapIt->second.begin();
+                            //       vecIt != mapIt->second.end(); ++vecIt, ++ichan)
+                            //     {
+                            //     X(ichan, 0) =
+                            //       tmpIntensityImages[ichan]->GetPixel(currIndex) - (*vecIt);
+                            //     }
+                            //   }
+                            // }
+
+                            MatrixType X(numModalities, 1);
+                            unsigned long zz = 0;
+                            for (typename MapOfInputImageVectors::const_iterator mapIt = intensityImages.begin();
+                                 mapIt != intensityImages.end(); ++mapIt, ++zz) {
+                              double curAvg(0.0);
+                              const double curMean = currMeans.at(mapIt->first);
+                              const double numCurModality = static_cast<double>(mapIt->second.size());
+                              for (unsigned xx = 0; xx < numCurModality; ++xx) {
+                                // Input images should be evaluated in physical space
+                                typename InputImageNNInterpolationType::OutputType inputImageValue = 0; // the default value here should be one
+                                if (inputImageNNInterpolatorsList.at(mapIt->first)[xx]->IsInsideBuffer(currPoint)) {
+                                  inputImageValue = inputImageNNInterpolatorsList.at(mapIt->first)[xx]->Evaluate(
+                                      currPoint);
+                                }
+                                curAvg += (inputImageValue - curMean);
+                              }
+                              X(zz, 0) = curAvg / numCurModality;
+                            }
+
+                            const MatrixType Y = invcov * X;
+                            FloatingPrecision mahalo = 0.0;
+                            for (unsigned int ichan = 0; ichan < numModalities; ichan++) {
+                              const FloatingPrecision &currVal = X(ichan, 0) * Y(ichan, 0);
+                              CHECK_NAN(currVal, __FILE__, __LINE__, "\n  currIndex: " << currIndex
+                                                                     << "\n  mahalo: " << mahalo
+                                                                     << "\n  ichan: " << ichan
+                                                                     << "\n  invcov: " << invcov
+                                                                     << "\n  X:  " << X
+                                                                     << "\n  Y:  " << Y);
+                              mahalo += currVal;
+                            }
+
+                            // Note:  This is the maximum likelyhood estimate as described in
+                            // formula at bottom of
+                            //       http://en.wikipedia.org/wiki/Maximum_likelihood_estimation
+                            const FloatingPrecision likelihood = std::exp(-0.5 * mahalo) * invdenom;
+
+                            const typename TProbabilityImage::PixelType currentPosterior =
+                                static_cast<typename TProbabilityImage::PixelType>((priorScale * priorValue *
+                                                                                    likelihood));
+                            CHECK_NAN(currentPosterior, __FILE__, __LINE__, "\n  currIndex: " << currIndex
+                                                                            << "\n  priorScale: " << priorScale <<
+                                                                            "\n  priorValue: " << priorValue
+                                                                            << "\n  likelihood: " << likelihood
+                                                                            << "\n  mahalo: " << mahalo
+                                                                            << "\n  invcov: " << invcov
+                                                                            << "\n  X:  " << X
+                                                                            << "\n  Y:  " << Y);
+                            post->SetPixel(currIndex, currentPosterior);
+                          }
+                        }
+                      }
+                    });
   return post;
 }
 
@@ -1212,7 +1372,10 @@ EMSegmentationFilter<TInputImage, TProbabilityImage>
                     typename ByteImageType::Pointer & nonAirRegion,
                     const unsigned int IterationID)
 {
+  std::cout << "\n^^^^^^^^^^^^^^^^^^^^^^^^" << std::endl;
   muLogMacro(<< "Computing posteriors..." << std::endl);
+  std::cout << "^^^^^^^^^^^^^^^^^^^^^^^^" << std::endl;
+
   const unsigned int numClasses = Priors.size();
   ProbabilityImageVectorType EMPosteriors;
   EMPosteriors.resize(numClasses);
@@ -1229,6 +1392,9 @@ EMSegmentationFilter<TInputImage, TProbabilityImage>
   // Run KNN on posteriors
   ProbabilityImageVectorType KNNPosteriors;
   KNNPosteriors.resize(numClasses);
+  // KNNPosteriors and EMPosteriors will be merged by averaging
+  ProbabilityImageVectorType AveragePosteriors;
+  AveragePosteriors.resize(numClasses);
   if( this->m_UseKNN )
     {
     ByteImagePointer thresholdedLabels = ITK_NULLPTR;
@@ -1258,7 +1424,8 @@ EMSegmentationFilter<TInputImage, TProbabilityImage>
     KNNPosteriors = this->ComputekNNPosteriors(EMPosteriors,
                                             IntensityImages,
                                             dirtyThresholdedLabels,
-                                            priorLabelCodeVector);
+                                            priorLabelCodeVector,
+                                            priorIsForegroundPriorVector);
     ComputeKNNPosteriorsTimer.Stop();
     itk::RealTimeClock::TimeStampType knnElapsedTime = ComputeKNNPosteriorsTimer.GetTotal();
     muLogMacro(<< "Computing KNN posteriors took " << knnElapsedTime << " " << ComputeKNNPosteriorsTimer.GetUnit() << std::endl);
@@ -1266,8 +1433,8 @@ EMSegmentationFilter<TInputImage, TProbabilityImage>
     NormalizeProbListInPlace<TProbabilityImage>( KNNPosteriors );
     this->WriteDebugPosteriors(IterationID, "KNN", KNNPosteriors);
 
-    ProbabilityImageVectorType AveragePosteriors;
-    AveragePosteriors.resize(numClasses);
+    // Merge KNN and EMPosteriors here by averaging.
+    //
     for(size_t pp = 0 ; pp < KNNPosteriors.size(); ++pp )
       {
       typedef itk::MultiplyImageFilter<TProbabilityImage,TProbabilityImage> MultiplyFilterType;
@@ -1282,15 +1449,12 @@ EMSegmentationFilter<TInputImage, TProbabilityImage>
       sqrtFilter->Update();
       AveragePosteriors[pp] = sqrtFilter->GetOutput();
       }
+    // Normalize probability list such that all posterior values will sum up to 1.
     NormalizeProbListInPlace<TProbabilityImage>( AveragePosteriors );
     this->WriteDebugPosteriors(IterationID, "AVG_KNN_EM", AveragePosteriors);
-    return AveragePosteriors;
     }
 
-  ////
-  //TODO: Merge KNN and EMPosteriors here by averaging.
-  ////
-  return (this->m_UseKNN) ? KNNPosteriors : EMPosteriors;
+  return (this->m_UseKNN) ? AveragePosteriors : EMPosteriors;
 }
 
 
@@ -1383,38 +1547,43 @@ EMSegmentationFilter<TInputImage, TProbabilityImage>
 ::ComputeLogLikelihood() const
 {
   const InputImageSizeType size = m_Posteriors[0]->GetLargestPossibleRegion().GetSize();
-  const unsigned int       computeInitialNumClasses = m_Posteriors.size();
-  FloatingPrecision        logLikelihood = 0.0;
+  const unsigned int computeInitialNumClasses = m_Posteriors.size();
 
-  {
-#if defined(LOCAL_USE_OPEN_MP)
-#pragma omp parallel for reduction(+:logLikelihood)
-#endif
-  for( LOOPITERTYPE kk = 0; kk < (LOOPITERTYPE)size[2]; kk++ )
-    {
-    for( LOOPITERTYPE jj = 0; jj < (LOOPITERTYPE)size[1]; jj++ )
-      {
-      for( LOOPITERTYPE ii = 0; ii < (LOOPITERTYPE)size[0]; ii++ )
-        {
-        const ProbabilityImageIndexType currIndex = {{ii, jj, kk}};
-        FloatingPrecision               tmp = 1e-20;
-        for( unsigned int iclass = 0; iclass < computeInitialNumClasses; iclass++ )
-          {
-          if( this->m_PriorIsForegroundPriorVector[iclass] ) // We should
-            // probably only
-            // compute the
-            // foreground.
-            {
-            tmp += m_Posteriors[iclass]->GetPixel(currIndex);
-            }
-          }
-        logLikelihood = logLikelihood + vcl_log(tmp);
-        }
-      }
-    }
-  }
-
-  return logLikelihood;
+  const CompensatedSummationType logLikelihoodFinal =
+      tbb::parallel_reduce(tbb::blocked_range3d<LOOPITERTYPE>(0, size[2], 1,
+                                                              0, size[1], size[1]/2,
+                                                              0, size[0], 512),
+                           CompensatedSummationType(),
+                           [=](const tbb::blocked_range3d<LOOPITERTYPE> &r,
+                               CompensatedSummationType logLikelihood) -> CompensatedSummationType {
+                             for (LOOPITERTYPE kk = r.pages().begin(); kk < r.pages().end(); ++kk) {
+                               for (LOOPITERTYPE jj = r.rows().begin(); jj < r.rows().end(); ++jj) {
+                                 for (LOOPITERTYPE ii = r.cols().begin(); ii < r.cols().end(); ++ii) {
+                                   const ProbabilityImageIndexType currIndex = {{ii, jj, kk}};
+                                   CompensatedSummationType tmp;
+				   tmp += 1e-20;
+                                   for (unsigned int iclass = 0; iclass < computeInitialNumClasses; iclass++) {
+                                     if (this->m_PriorIsForegroundPriorVector[iclass]) // We should
+                                       // probably only
+                                       // compute the
+                                       // foreground.
+                                     {
+                                       tmp += m_Posteriors[iclass]->GetPixel(currIndex);
+                                     }
+                                   }
+                                   logLikelihood += std::log(tmp.GetSum());
+                                 }
+                               }
+                             }
+                             return logLikelihood;
+                           },
+                           [] ( CompensatedSummationType a,
+                                const CompensatedSummationType & b ) ->  CompensatedSummationType {
+                                    a += b.GetSum();
+                                    return a;
+                           }
+      );
+  return logLikelihoodFinal.GetSum();
 }
 
 /**
@@ -1428,6 +1597,7 @@ ComputeTissueRegion(const typename TInputImage::Pointer referenceImage, const un
   typedef itk::BRAINSROIAutoImageFilter<TInputImage, TByteImage> ROIAutoType;
   typename ROIAutoType::Pointer  ROIFilter = ROIAutoType::New();
   ROIFilter->SetInput(referenceImage);
+  ROIFilter->SetClosingSize(15);
   ROIFilter->SetDilateSize(safetyRegion); // Create a very tight fitting tissue
                                           // region here.
   ROIFilter->Update();
@@ -1440,23 +1610,20 @@ void
 EMSegmentationFilter<TInputImage, TProbabilityImage>
 ::WriteDebugHeadRegion(const unsigned int CurrentEMIteration) const
 {
-  if( this->m_DebugLevel > 7 )
-    {
-    std::stringstream CurrentEMIteration_stream("");
-    CurrentEMIteration_stream << CurrentEMIteration;
-    { // DEBUG:  This code is for debugging purposes only;
-    typedef itk::ImageFileWriter<ByteImageType> WriterType;
-    typename WriterType::Pointer writer = WriterType::New();
-    writer->UseCompressionOn();
+  std::stringstream CurrentEMIteration_stream("");
+  CurrentEMIteration_stream << CurrentEMIteration;
+  { // DEBUG:  This code is for debugging purposes only;
+  typedef itk::ImageFileWriter<ByteImageType> WriterType;
+  typename WriterType::Pointer writer = WriterType::New();
+  writer->UseCompressionOn();
 
-    const std::string fn = this->m_OutputDebugDir + "/HEAD_REGION_LEVEL_" + CurrentEMIteration_stream.str()
-      + ".nii.gz";
-    writer->SetInput( this->m_NonAirRegion );
-    writer->SetFileName(fn.c_str() );
-    writer->Update();
-    muLogMacro( << "DEBUG:  Wrote image " << fn <<  std::endl);
-    }
-    }
+  const std::string fn = this->m_OutputDebugDir + "/HEAD_REGION_LEVEL_" + CurrentEMIteration_stream.str()
+    + ".nii.gz";
+  writer->SetInput( this->m_NonAirRegion );
+  writer->SetFileName(fn.c_str() );
+  writer->Update();
+  muLogMacro( << "DEBUG:  Wrote image " << fn <<  std::endl);
+  }
 }
 
 template <class TInputImage, class TProbabilityImage>
@@ -1525,31 +1692,39 @@ void
 EMSegmentationFilter<TInputImage, TProbabilityImage>
 ::WriteDebugWarpedAtlasImages(const unsigned int CurrentEMIteration) const
 {
-  std::stringstream CurrentEMIteration_stream("");
-
-  CurrentEMIteration_stream << CurrentEMIteration;
-  if( this->m_DebugLevel > 9 )
+  if( !m_UpdateTransformation && CurrentEMIteration>0 )
     {
-    for(typename MapOfInputImageVectors::const_iterator mapIt =
-          this->m_WarpedAtlasImages.begin();
-        mapIt != this->m_WarpedAtlasImages.end(); ++mapIt)
-      {
-      for(typename InputImageVector::const_iterator imIt = mapIt->second.begin();
-          imIt != mapIt->second.end(); ++imIt)
-        {
-        typedef itk::ImageFileWriter<InputImageType> WriterType;
-        typename WriterType::Pointer writer = WriterType::New();
-        writer->UseCompressionOn();
+    // warped atlas images have not changed
+    return;
+    }
+  else
+    {
+    std::stringstream CurrentEMIteration_stream("");
 
-        std::stringstream template_index_stream("");
-        template_index_stream << mapIt->first
-                              << std::distance(mapIt->second.begin(),imIt);
-        const std::string fn = this->m_OutputDebugDir + "/WARPED_ATLAS_INDEX_" + template_index_stream.str()
+    CurrentEMIteration_stream << CurrentEMIteration;
+    if( this->m_DebugLevel > 9 )
+      {
+      for(typename MapOfInputImageVectors::const_iterator mapIt =
+          this->m_WarpedAtlasImages.begin();
+          mapIt != this->m_WarpedAtlasImages.end(); ++mapIt)
+        {
+        for(typename InputImageVector::const_iterator imIt = mapIt->second.begin();
+            imIt != mapIt->second.end(); ++imIt)
+          {
+          typedef itk::ImageFileWriter<InputImageType> WriterType;
+          typename WriterType::Pointer writer = WriterType::New();
+          writer->UseCompressionOn();
+
+          std::stringstream template_index_stream("");
+          template_index_stream << mapIt->first
+          << std::distance(mapIt->second.begin(),imIt);
+          const std::string fn = this->m_OutputDebugDir + "/WARPED_ATLAS_INDEX_" + template_index_stream.str()
           + "_LEVEL_" + CurrentEMIteration_stream.str() + ".nii.gz";
-        writer->SetInput((*imIt));
-        writer->SetFileName(fn.c_str() );
-        writer->Update();
-        muLogMacro( << "DEBUG:  Wrote image " << fn <<  std::endl);
+          writer->SetInput((*imIt));
+          writer->SetFileName(fn.c_str() );
+          writer->Update();
+          muLogMacro( << "DEBUG:  Wrote image " << fn <<  std::endl);
+          }
         }
       }
     }
@@ -1585,127 +1760,140 @@ EMSegmentationFilter<TInputImage, TProbabilityImage>
   // candidate regions"
   // using the table from BRAINSMultiModeHistogramThresholder.
   std::vector<typename ByteImageType::Pointer> subjectCandidateRegions;
-
   subjectCandidateRegions.resize(WarpedPriorsList.size() );
+
   { // StartValid Regions Section
-#if defined(LOCAL_USE_OPEN_MP)
-#pragma omp parallel for default(shared)
-#endif
-  for( LOOPITERTYPE i = 0; i < (LOOPITERTYPE)WarpedPriorsList.size(); i++ )
-    {
-    typename ByteImageType::Pointer probThreshImage = ITK_NULLPTR;
 
-    typedef itk::BinaryThresholdImageFilter<TProbabilityImage, ByteImageType> ProbThresholdType;
-    typename ProbThresholdType::Pointer probThresh = ProbThresholdType::New();
-    probThresh->SetInput(  WarpedPriorsList[i] );
-    probThresh->SetInsideValue(1);
-    probThresh->SetOutsideValue(0);
-    probThresh->SetLowerThreshold(0.05);  // Hueristic: Need greater than 1 in 20
-    // chance of being this structure
-    // from the spatial probabilities
-    probThresh->SetUpperThreshold( vcl_numeric_limits<typename TProbabilityImage::PixelType>::max() );
-    // No upper limit needed, values
-    // should be between 0 and 1
-    probThresh->Update();
-    probThreshImage = probThresh->GetOutput();
-    if( this->m_DebugLevel > 9 )
-      {
-      std::stringstream CurrentEMIteration_stream("");
-      CurrentEMIteration_stream << CurrentEMIteration;
-      // Write the subject candidate regions
+    tbb::mutex   stdoutMutex;
+    tbb::parallel_for(tbb::blocked_range<LOOPITERTYPE>(0,WarpedPriorsList.size(),1),
+                      [=,&stdoutMutex,&subjectCandidateRegions](const tbb::blocked_range<LOOPITERTYPE> &r) {
+                        for (LOOPITERTYPE i = r.begin(); i < r.end(); ++i) {
+                          std::ostringstream logMessage("\n*********************************************\n");
+                          typename ByteImageType::Pointer probThreshImage = ITK_NULLPTR;
 
-      std::ostringstream oss;
-      oss << this->m_OutputDebugDir << "CANDIDIDATE_PROBTHRESH_" << this->m_PriorNames[i] << "_LEVEL_"
-          << CurrentEMIteration_stream.str() << ".nii.gz" << std::ends;
-      std::string fn = oss.str();
-      muLogMacro( << "Writing Subject Candidate Region." << fn << std::endl );
-      muLogMacro( << std::endl );
+                          typedef itk::BinaryThresholdImageFilter<TProbabilityImage, ByteImageType> ProbThresholdType;
+                          typename ProbThresholdType::Pointer probThresh = ProbThresholdType::New();
+                          probThresh->SetInput(WarpedPriorsList[i]);
+                          probThresh->SetInsideValue(1);
+                          probThresh->SetOutsideValue(0);
+                          probThresh->SetLowerThreshold(0.1); // Derived empirically based on experiments on BrainWeb data
+                          // chance of being this structure
+                          // from the spatial probabilities
+                          probThresh->SetUpperThreshold(
+                              std::numeric_limits<typename TProbabilityImage::PixelType>::max());
+                          // No upper limit needed, values
+                          // should be between 0 and 1
+                          probThresh->Update();
+                          probThreshImage = probThresh->GetOutput();
+                          if (this->m_DebugLevel > 9) {
+                            std::stringstream CurrentEMIteration_stream("");
+                            CurrentEMIteration_stream << CurrentEMIteration;
+                            // Write the subject candidate regions
 
-      typedef itk::ImageFileWriter<ByteImageType> ByteWriterType;
-      typename ByteWriterType::Pointer writer = ByteWriterType::New();
-      writer->SetInput(probThreshImage);
-      writer->SetFileName(fn.c_str() );
-      writer->UseCompressionOn();
-      writer->Update();
-      }
+                            std::ostringstream oss;
+                            oss << this->m_OutputDebugDir << "CANDIDIDATE_PROBTHRESH_" << this->m_PriorNames[i] <<
+                            "_LEVEL_"
+                            << CurrentEMIteration_stream.str() << ".nii.gz" << std::ends;
+                            std::string fn = oss.str();
+                            std::cout << "------------------------" << std::endl;
+                            logMessage << "Writing Subject Candidate Region: " << fn << std::endl;
+                            logMessage << std::endl;
 
+                            typedef itk::ImageFileWriter<ByteImageType> ByteWriterType;
+                            typename ByteWriterType::Pointer writer = ByteWriterType::New();
+                            writer->SetInput(probThreshImage);
+                            writer->SetFileName(fn.c_str());
+                            writer->UseCompressionOn();
+                            writer->Update();
+                          }
 
-    const unsigned int numberOfModes = TotalMapSize(intensityList);
-    typedef typename itk::MultiModeHistogramThresholdBinaryImageFilter<InputImageType,
-      ByteImageType> ThresholdRegionFinderType;
-    typename ThresholdRegionFinderType::ThresholdArrayType QuantileLowerThreshold(numberOfModes);
-    typename ThresholdRegionFinderType::ThresholdArrayType QuantileUpperThreshold(numberOfModes);
-    typename ThresholdRegionFinderType::Pointer thresholdRegionFinder = ThresholdRegionFinderType::New();
-    // TODO:  Need to define PortionMaskImage from deformed probspace
-    thresholdRegionFinder->SetBinaryPortionImage(ForegroundBrainRegion);
-    unsigned int modeIndex = 0;
-    for(typename MapOfInputImageVectors::const_iterator mapIt = intensityList.begin();
-        mapIt != intensityList.end(); ++mapIt)
-      {
-      for(typename InputImageVector::const_iterator imIt = mapIt->second.begin();
-          imIt != mapIt->second.end(); ++imIt, ++modeIndex)
-        {
-        thresholdRegionFinder->SetInput(modeIndex, (*imIt));
-        const std::string imageType = mapIt->first;
-        const std::string priorType = this->m_PriorNames[i];
-        if( m_TissueTypeThresholdMapsRange[priorType].find(imageType) ==
-            m_TissueTypeThresholdMapsRange[priorType].end() )
-          {
-          muLogMacro(<< "NOT FOUND:" << "[" << priorType << "," << imageType
-                     << "]: [" << 0.00 << "," << 1.00 << "]"
-                     <<  std::endl);
-          QuantileLowerThreshold.SetElement(modeIndex, 0.00);
-          QuantileUpperThreshold.SetElement(modeIndex, 1.00);
-          }
-        else
-          {
-          const float lower = m_TissueTypeThresholdMapsRange[priorType][imageType].GetLower();
-          const float upper = m_TissueTypeThresholdMapsRange[priorType][imageType].GetUpper();
-          muLogMacro( <<  "[" << priorType << "," << imageType << "]: [" << lower << "," << upper << "]" <<  std::endl);
-          QuantileLowerThreshold.SetElement(modeIndex, lower);
-          QuantileUpperThreshold.SetElement(modeIndex, upper);
-          m_TissueTypeThresholdMapsRange[priorType][imageType].Print();
-          }
-        }
-      }
-    // Assume upto (2*0.025)% of intensities are noise that corrupts the image
-    // min/max values
-    thresholdRegionFinder->SetLinearQuantileThreshold(0.025);
-    thresholdRegionFinder->SetQuantileLowerThreshold(QuantileLowerThreshold);
-    thresholdRegionFinder->SetQuantileUpperThreshold(QuantileUpperThreshold);
-    // thresholdRegionFinder->SetInsideValue(1);
-    // thresholdRegionFinder->SetOutsideValue(0);//Greatly reduce the value to
-    // zero.
-    thresholdRegionFinder->Update();
-    if( this->m_DebugLevel > 8 )
-      {
-      std::stringstream CurrentEMIteration_stream("");
-      CurrentEMIteration_stream << CurrentEMIteration;
-      // Write the subject candidate regions
+                          // All input images to the MultiModeHistogramThresholdBinaryImageFilter
+                          // need to be at the same voxel space, so all input image map are resampled
+                          // to the lattice of the first key image using identity transform, since
+                          // they are already aligned in physical space.
+                          const MapOfInputImageVectors intensityImagesList =
+                              ResampleImageListToFirstKeyImage("Linear", intensityList);
 
-      std::ostringstream oss;
-      oss << this->m_OutputDebugDir << "CANDIDIDATE_INTENSITY_REGION_" << this->m_PriorNames[i] << "_LEVEL_"
-          << CurrentEMIteration_stream.str() << ".nii.gz" << std::ends;
-      std::string fn = oss.str();
-      muLogMacro( << "Writing Subject Candidate Region." << fn << std::endl );
-      muLogMacro( << std::endl );
+                          const unsigned int numberOfModes = TotalMapSize(intensityImagesList);
 
-      typedef itk::ImageFileWriter<ByteImageType> ByteWriterType;
-      typename ByteWriterType::Pointer writer = ByteWriterType::New();
-      writer->SetInput(thresholdRegionFinder->GetOutput() );
-      writer->SetFileName(fn.c_str() );
-      writer->UseCompressionOn();
-      writer->Update();
-      }
+                          typedef typename itk::MultiModeHistogramThresholdBinaryImageFilter<InputImageType,
+                              ByteImageType> ThresholdRegionFinderType;
+                          typename ThresholdRegionFinderType::ThresholdArrayType QuantileLowerThreshold(numberOfModes);
+                          typename ThresholdRegionFinderType::ThresholdArrayType QuantileUpperThreshold(numberOfModes);
+                          typename ThresholdRegionFinderType::Pointer thresholdRegionFinder = ThresholdRegionFinderType::New();
+                          // TODO:  Need to define PortionMaskImage from deformed probspace
+                          thresholdRegionFinder->SetBinaryPortionImage(ForegroundBrainRegion);
+                          unsigned int modeIndex = 0;
+                          for (typename MapOfInputImageVectors::const_iterator mapIt = intensityImagesList.begin();
+                               mapIt != intensityImagesList.end(); ++mapIt) {
+                            for (typename InputImageVector::const_iterator imIt = mapIt->second.begin();
+                                 imIt != mapIt->second.end(); ++imIt, ++modeIndex) {
+                              thresholdRegionFinder->SetInput(modeIndex, (*imIt));
+                              const std::string imageType = mapIt->first;
+                              const std::string priorType = this->m_PriorNames[i];
+                              if (m_TissueTypeThresholdMapsRange[priorType].find(imageType) ==
+                                  m_TissueTypeThresholdMapsRange[priorType].end()) {
+                                logMessage << "NOT FOUND:" << "[" << priorType << "," << imageType
+                                               << "]: [" << 0.00 << "," << 1.00 << "]"
+                                               <<  std::endl;
+                                QuantileLowerThreshold.SetElement(modeIndex, 0.00);
+                                QuantileUpperThreshold.SetElement(modeIndex, 1.00);
+                              }
+                              else {
+                                const float lower = m_TissueTypeThresholdMapsRange[priorType][imageType].GetLower();
+                                const float upper = m_TissueTypeThresholdMapsRange[priorType][imageType].GetUpper();
+                                logMessage <<  "[" << priorType << "," << imageType
+                                           << "]: [" << lower << "," << upper << "]" <<  std::endl;
+                                QuantileLowerThreshold.SetElement(modeIndex, lower);
+                                QuantileUpperThreshold.SetElement(modeIndex, upper);
+                                m_TissueTypeThresholdMapsRange[priorType][imageType].Print();
+                              }
+                            }
+                          }
+                          // Assume upto (2*0.025)% of intensities are noise that corrupts the image
+                          // min/max values
+                          thresholdRegionFinder->SetLinearQuantileThreshold(0.025);
+                          thresholdRegionFinder->SetQuantileLowerThreshold(QuantileLowerThreshold);
+                          thresholdRegionFinder->SetQuantileUpperThreshold(QuantileUpperThreshold);
+                          // thresholdRegionFinder->SetInsideValue(1);
+                          // thresholdRegionFinder->SetOutsideValue(0);//Greatly reduce the value to
+                          // zero.
+                          thresholdRegionFinder->Update();
+                          if (this->m_DebugLevel > 8) {
+                            std::stringstream CurrentEMIteration_stream("");
+                            CurrentEMIteration_stream << CurrentEMIteration;
+                            // Write the subject candidate regions
 
-    // Now multiply the warped priors by the subject candidate regions.
-    typename itk::MultiplyImageFilter<ByteImageType, ByteImageType, ByteImageType>::Pointer multFilter =
-      itk::MultiplyImageFilter<ByteImageType, ByteImageType, ByteImageType>::New();
-    multFilter->SetInput1( probThreshImage );
-    multFilter->SetInput2( thresholdRegionFinder->GetOutput() );
-    multFilter->Update();
-    subjectCandidateRegions[i] = multFilter->GetOutput();
-    } // End loop over all warped priors
+                            std::ostringstream oss;
+                            oss << this->m_OutputDebugDir << "CANDIDIDATE_INTENSITY_REGION_" << this->m_PriorNames[i] <<
+                            "_LEVEL_"
+                            << CurrentEMIteration_stream.str() << ".nii.gz" << std::ends;
+                            std::string fn = oss.str();
+                            logMessage << "Writing Subject Candidate Region: " << fn << std::endl;
+                            logMessage << std::endl;
+
+                            typedef itk::ImageFileWriter<ByteImageType> ByteWriterType;
+                            typename ByteWriterType::Pointer writer = ByteWriterType::New();
+                            writer->SetInput(thresholdRegionFinder->GetOutput());
+                            writer->SetFileName(fn.c_str());
+                            writer->UseCompressionOn();
+                            writer->Update();
+                          }
+
+                          // Now multiply the warped priors by the subject candidate regions.
+                          typename itk::MultiplyImageFilter<ByteImageType, ByteImageType, ByteImageType>::Pointer multFilter =
+                              itk::MultiplyImageFilter<ByteImageType, ByteImageType, ByteImageType>::New();
+                          multFilter->SetInput1(probThreshImage);
+                          multFilter->SetInput2(thresholdRegionFinder->GetOutput());
+                          multFilter->Update();
+                          subjectCandidateRegions[i] = multFilter->GetOutput();
+                          {
+                          tbb::mutex::scoped_lock lock(stdoutMutex);  // Implements locking this entire section to one thread at a time
+                          muLogMacro(<< "\n==" << this->m_PriorNames[i] << "=========================\n" << logMessage.str() << std::endl);
+                          //lock implicity released when it goes out of scope
+                          }
+                        } // End loop over all warped priors
+                      });
 
   { // Ensure that every candidate region has some value
   const unsigned int candiateVectorSize = subjectCandidateRegions.size();
@@ -1716,8 +1904,7 @@ EMSegmentationFilter<TInputImage, TProbabilityImage>
     {
     const typename ByteImageType::IndexType myIndex = firstCandidateIter.GetIndex();
     bool AllPixelsAreZero = true;
-//        unsigned int maxPriorRegionIndex = 0;
-    typename TProbabilityImage::PixelType maxProbValue = WarpedPriorsList[0]->GetPixel(myIndex);
+
     for( unsigned int k = 0; ( k < candiateVectorSize ) && AllPixelsAreZero; k++ )
       {
       const typename ByteImageType::PixelType value = subjectCandidateRegions[k]->GetPixel(myIndex);
@@ -1725,15 +1912,10 @@ EMSegmentationFilter<TInputImage, TProbabilityImage>
         {
         AllPixelsAreZero = false;
         }
-      typename TProbabilityImage::PixelType currValue = WarpedPriorsList[k]->GetPixel(myIndex);
-      if( currValue > maxProbValue )
-        {
-        maxProbValue = currValue;
-//            maxPriorRegionIndex = k;
-        }
       }
+
     if( AllPixelsAreZero ) // If all candidate regions are zero, then force
-      // to most likely background value.
+                           // to most likely background value.
       {
       AllZeroCounts++;
       for( unsigned int k = 0; k < candiateVectorSize; k++ )
@@ -1777,7 +1959,7 @@ EMSegmentationFilter<TInputImage, TProbabilityImage>
       oss << this->m_OutputDebugDir << "CANDIDIDATE_FINAL" << this->m_PriorNames[i] << "_LEVEL_"
           << CurrentEMIteration_stream.str() << ".nii.gz" << std::ends;
       std::string fn = oss.str();
-      muLogMacro( << "Writing Subject Candidate Region." << fn << std::endl );
+      muLogMacro( << "Writing Final Subject Candidate Region: " << fn << std::endl );
       muLogMacro( << std::endl );
 
       typedef itk::ImageFileWriter<ByteImageType> ByteWriterType;
@@ -1796,10 +1978,7 @@ EMSegmentationFilter<TInputImage, TProbabilityImage>
 template <class TInputImage, class TProbabilityImage>
 typename EMSegmentationFilter<TInputImage, TProbabilityImage>::ByteImageVectorType
 EMSegmentationFilter<TInputImage, TProbabilityImage>
-::ForceToOne(const unsigned int /* CurrentEMIteration */,
-             // const MapOfInputImageVectors &intensityList,
-             ProbabilityImageVectorType &WarpedPriorsList,
-             typename ByteImageType::Pointer /* NonAirRegion */)
+::ForceToOne(ProbabilityImageVectorType &WarpedPriorsList)
 {
   // #################################################################
   // #################################################################
@@ -1807,24 +1986,22 @@ EMSegmentationFilter<TInputImage, TProbabilityImage>
   // #################################################################
   // #################################################################
   // #################################################################
-  // For each intensityList, get it's type, and then create an "anded mask of
-  // candidate regions"
-  // using the table from BRAINSMultiModeHistogramThresholder.
+  // Force all subjectCandidateRegions to be all one masks.
+  //
   ByteImageVectorType subjectCandidateRegions;
 
   subjectCandidateRegions.resize(WarpedPriorsList.size() );
   { // StartValid Regions Section
-#if defined(LOCAL_USE_OPEN_MP)
-#pragma omp parallel for default(shared)
-#endif
-  for( LOOPITERTYPE i = 0; i < (LOOPITERTYPE)WarpedPriorsList.size(); i++ )
-    {
-    subjectCandidateRegions[i] = ByteImageType::New();
-    subjectCandidateRegions[i]->CopyInformation(WarpedPriorsList[i].GetPointer() );
-    subjectCandidateRegions[i]->SetRegions( WarpedPriorsList[i]->GetLargestPossibleRegion() );
-    subjectCandidateRegions[i]->Allocate();
-    subjectCandidateRegions[i]->FillBuffer(1);
-    }
+    tbb::parallel_for(tbb::blocked_range<LOOPITERTYPE>(0,WarpedPriorsList.size(),1),
+                      [=,&subjectCandidateRegions](const tbb::blocked_range<LOOPITERTYPE> &r) {
+                        for (LOOPITERTYPE i = r.begin(); i < r.end(); ++i) {
+                          subjectCandidateRegions[i] = ByteImageType::New();
+                          subjectCandidateRegions[i]->CopyInformation(WarpedPriorsList[i].GetPointer());
+                          subjectCandidateRegions[i]->SetRegions(WarpedPriorsList[i]->GetLargestPossibleRegion());
+                          subjectCandidateRegions[i]->Allocate();
+                          subjectCandidateRegions[i]->FillBuffer(1);
+                        }
+                      });
   } // END Valid regions section
 
   return subjectCandidateRegions;
@@ -1899,25 +2076,33 @@ void
 EMSegmentationFilter<TInputImage, TProbabilityImage>
 ::WriteDebugWarpedAtlasPriors(const unsigned int CurrentEMIteration) const
 {
-  std::stringstream CurrentEMIteration_stream("");
-
-  CurrentEMIteration_stream << CurrentEMIteration;
-  if( this->m_DebugLevel > 9 )
+  if( !m_UpdateTransformation && CurrentEMIteration>0 )
     {
-    for( unsigned int vIndex = 0; vIndex < this->m_WarpedPriors.size(); vIndex++ )
-      {
-      typedef itk::ImageFileWriter<InputImageType> WriterType;
-      typename WriterType::Pointer writer = WriterType::New();
-      writer->UseCompressionOn();
+    // warped prior images have not changed
+    return;
+    }
+  else
+    {
+    std::stringstream CurrentEMIteration_stream("");
 
-      std::stringstream template_index_stream("");
-      template_index_stream << this->m_PriorNames[vIndex];
-      const std::string fn = this->m_OutputDebugDir + "/WARPED_PRIOR_" + template_index_stream.str() + "_LEVEL_"
+    CurrentEMIteration_stream << CurrentEMIteration;
+    if( this->m_DebugLevel > 9 )
+      {
+      for( unsigned int vIndex = 0; vIndex < this->m_WarpedPriors.size(); vIndex++ )
+        {
+        typedef itk::ImageFileWriter<InputImageType> WriterType;
+        typename WriterType::Pointer writer = WriterType::New();
+        writer->UseCompressionOn();
+
+        std::stringstream template_index_stream("");
+        template_index_stream << this->m_PriorNames[vIndex];
+        const std::string fn = this->m_OutputDebugDir + "/WARPED_PRIOR_" + template_index_stream.str() + "_LEVEL_"
         + CurrentEMIteration_stream.str() + ".nii.gz";
-      writer->SetInput(m_WarpedPriors[vIndex]);
-      writer->SetFileName(fn.c_str() );
-      writer->Update();
-      muLogMacro( << "DEBUG:  Wrote image " << fn <<  std::endl);
+        writer->SetInput(m_WarpedPriors[vIndex]);
+        writer->SetFileName(fn.c_str() );
+        writer->Update();
+        muLogMacro( << "DEBUG:  Wrote image " << fn <<  std::endl);
+        }
       }
     }
 }
@@ -1961,6 +2146,7 @@ EMSegmentationFilter<TInputImage, TProbabilityImage>
   if( m_AtlasTransformType == "SyN" )
     {
     muLogMacro(<< "HACK: " << m_AtlasTransformType <<  " not instumented for transformation update."  << std::endl );
+    this->m_UpdateTransformation = false;
     return;
     }
   muLogMacro(<< "Updating Warping with transform type: " << m_AtlasTransformType  << std::endl );
@@ -2038,6 +2224,7 @@ EMSegmentationFilter<TInputImage, TProbabilityImage>
         typedef itk::BRAINSROIAutoImageFilter<InputImageType, itk::Image<unsigned char, 3> > ROIAutoType;
         typename ROIAutoType::Pointer  ROIFilter = ROIAutoType::New();
         ROIFilter->SetInput((*atIt));
+        ROIFilter->SetClosingSize(15);
         ROIFilter->SetDilateSize(10);
         ROIFilter->Update();
         atlasToSubjectRegistrationHelper->SetMovingBinaryVolume(ROIFilter->GetSpatialObjectROI() );
@@ -2045,6 +2232,7 @@ EMSegmentationFilter<TInputImage, TProbabilityImage>
         typedef itk::BRAINSROIAutoImageFilter<InputImageType, itk::Image<unsigned char, 3> > ROIAutoType;
         ROIFilter = ROIAutoType::New();
         ROIFilter->SetInput((*imIt));
+        ROIFilter->SetClosingSize(15);
         ROIFilter->SetDilateSize(10);
         ROIFilter->Update();
         atlasToSubjectRegistrationHelper->SetFixedBinaryVolume(ROIFilter->GetSpatialObjectROI() );
@@ -2236,6 +2424,50 @@ EMSegmentationFilter<TInputImage, TProbabilityImage>
     itkExceptionMacro( << "ERROR:  Must suppply an intial transformation!" );
     }
 
+  if( m_UsePurePlugs )
+    {
+    ByteImageType::SizeType numberOfContinuousIndexSubSamples;
+    numberOfContinuousIndexSubSamples[0] = m_NumberOfSubSamplesInEachPlugArea[0];
+    numberOfContinuousIndexSubSamples[1] = m_NumberOfSubSamplesInEachPlugArea[1];
+    numberOfContinuousIndexSubSamples[2] = m_NumberOfSubSamplesInEachPlugArea[2];
+
+    // set all multi modal input images to an image vector type
+    InputImageVector                         inputImagesVector;
+    for(typename MapOfInputImageVectors::const_iterator mapIt = this->m_InputImages.begin();
+        mapIt != this->m_InputImages.end();
+        ++mapIt)
+      {
+      const size_t numCurModality = mapIt->second.size();
+      for(unsigned m = 0; m < numCurModality; ++m)
+        {
+        inputImagesVector.push_back( mapIt->second[m] );
+        }
+      }
+
+    this->m_PurePlugsMask =
+      GeneratePurePlugMask<InputImageType, ByteImageType>( inputImagesVector,
+                                                          this->m_PurePlugsThreshold,
+                                                          numberOfContinuousIndexSubSamples,
+                                                          false );
+    if( this->m_PurePlugsMask.IsNull() )
+      {
+      itkGenericExceptionMacro( << "Error: Output pure plugs mask is null."
+                                << std::endl );
+      }
+    else
+      {
+      if( this->m_DebugLevel > 6 )
+        {
+        const std::string fn = this->m_OutputDebugDir + "/DEBUG_PURE_PLUGS_MASK.nii.gz";
+        typedef typename itk::ImageFileWriter<ByteImageType> MaskWriterType;
+        typename MaskWriterType::Pointer maskwriter = MaskWriterType::New();
+        maskwriter->SetInput( this->m_PurePlugsMask );
+        maskwriter->SetFileName(fn);
+        maskwriter->Update();
+        }
+      }
+    }
+
   this->m_NonAirRegion = ComputeTissueRegion<TInputImage, ByteImageType>(this->GetFirstInputImage(), 3);
   if( this->m_DebugLevel > 9 )
     {
@@ -2386,10 +2618,7 @@ EMSegmentationFilter<TInputImage, TProbabilityImage>
                       this->m_TemplateGenericTransform);
       this->WriteDebugWarpedAtlasImages(CurrentEMIteration);
       }
-    SubjectCandidateRegions = this->ForceToOne(CurrentEMIteration,
-                                               // this->m_CorrectedImages,
-                                               this->m_WarpedPriors,
-                                               this->m_CleanedLabels);
+    SubjectCandidateRegions = this->ForceToOne(this->m_WarpedPriors);
     {
     this->BlendPosteriorsAndPriors(1.0 - priorWeighting, this->m_Posteriors, this->m_WarpedPriors,
                                    this->m_WarpedPriors);
@@ -2404,17 +2633,17 @@ EMSegmentationFilter<TInputImage, TProbabilityImage>
     logLikelihood = this->ComputeLogLikelihood();
     muLogMacro(<< "log(likelihood) = " << logLikelihood <<  std::endl);
     // TODO: move to before prevL update
-    deltaLogLikelihood = vcl_fabs( (logLikelihood - prevLogLikelihood) / prevLogLikelihood);
-    // (logLikelihood - prevLogLikelihood) / vcl_fabs(prevLogLikelihood);
+    deltaLogLikelihood = std::fabs( (logLikelihood - prevLogLikelihood) / prevLogLikelihood);
+    // (logLikelihood - prevLogLikelihood) / std::fabs(prevLogLikelihood);
     CHECK_NAN(deltaLogLikelihood, __FILE__, __LINE__,
               "\n logLikelihood: " << logLikelihood << "\n prevLogLikelihood: " << prevLogLikelihood );
     muLogMacro(
-      << "delta vcl_log(likelihood) = " << deltaLogLikelihood << "  Convergence Tolerance: "
+      << "delta std::log(likelihood) = " << deltaLogLikelihood << "  Convergence Tolerance: "
       << m_WarpLikelihoodTolerance <<  std::endl);
 
     // Convergence check
     converged = (CurrentEMIteration >= m_MaximumIterations)
-      // Ignore jumps in the vcl_log likelihood
+      // Ignore jumps in the std::log likelihood
       //    ||
       //    (deltaLogLikelihood < 0)
       ||
@@ -2480,10 +2709,6 @@ EMSegmentationFilter<TInputImage, TProbabilityImage>
                   this->m_SampleSpacing, this->m_DebugLevel,
                   this->m_OutputDebugDir);
     }
-  this->m_ListOfClassStatistics.resize(0); // Reset this to empty for debugging
-                                           // purposes to induce failures when
-                                           // being re-used.
-  this->m_ListOfClassStatistics = this->ComputeDistributions(SubjectCandidateRegions, this->m_Posteriors);
   this->WritePartitionTable(0 + 100);
 }
 
@@ -2515,6 +2740,17 @@ EMSegmentationFilter<TInputImage, TProbabilityImage>
   std::vector<FloatImageType::Pointer> biasPosteriors;
   std::vector<ByteImageType::Pointer>  biasCandidateRegions;
 
+  // resample the PurePlugsMask to the voxel lattice of the CandidateRegions
+  ByteImagePointer resampledPurePlugsMask = ITK_NULLPTR;
+  if( this->m_UsePurePlugs && this->m_PurePlugsMask.IsNotNull() )
+    {
+    resampledPurePlugsMask =
+      ResampleImageWithIdentityTransform<ByteImageType>( "NearestNeighbor", // proper interpolator for mask image
+                                                          0,
+                                                          this->m_PurePlugsMask.GetPointer(),
+                                                          CandidateRegions[0].GetPointer() );
+    }
+
   for( unsigned int iclass = 0; iclass < numClasses; iclass++ )
     {
     const unsigned iprior = iclass;
@@ -2523,7 +2759,26 @@ EMSegmentationFilter<TInputImage, TProbabilityImage>
       // Focus only on FG classes, more accurate if bg classification is bad
       // but sacrifices accuracy in border regions (tend to overcorrect)
       biasPosteriors.push_back(probImages[iclass]);
-      biasCandidateRegions.push_back(CandidateRegions[iclass]);
+
+      if( this->m_UsePurePlugs && resampledPurePlugsMask.IsNotNull() )
+        {
+        // Inside "LLSBiasCorrector", biasCandidateRegions are
+        // passed to CombinedComputeDistributions where only
+        // pure samples should be used for distributions computations.
+        typedef itk::MultiplyImageFilter<ByteImageType, ByteImageType>
+          MultiplyImageFilterType;
+        typename MultiplyImageFilterType::Pointer multiplyFilter
+          = MultiplyImageFilterType::New();
+        multiplyFilter->SetInput1( resampledPurePlugsMask );
+        multiplyFilter->SetInput2( CandidateRegions[iclass] );
+        multiplyFilter->Update();
+
+        biasCandidateRegions.push_back( multiplyFilter->GetOutput() );
+        }
+      else
+        {
+        biasCandidateRegions.push_back( CandidateRegions[iclass] );
+        }
       }
     }
 

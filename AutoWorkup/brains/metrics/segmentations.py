@@ -1,3 +1,6 @@
+from __future__ import print_function
+from builtins import map
+from builtins import range
 import numpy as np
 import os.path
 
@@ -11,7 +14,7 @@ labels = ['caudate', 'putamen', 'hippocampus', 'thalamus', 'accumben', 'globus',
 
 
 def constructLabels(labels):
-    numbers = range(1, ((len(labels) * 2) + 1))
+    numbers = list(range(1, ((len(labels) * 2) + 1)))
     full_labels = []
     index = 0
     for label in labels:
@@ -48,9 +51,9 @@ def calculateLabelVolume(dirname, label):
     image = sitk.ReadImage(labelFile)
     nda = sitk.GetArrayFromImage(image)
     maskSum = nda.sum()
-    print maskSum
+    print(maskSum)
     size = image.GetSpacing()
-    print size
+    print(size)
     return maskSum * size[0] * size[1] * size[2]
 
 
@@ -87,7 +90,7 @@ def getVolume(args=[], kwds={}):
         try:
         # config needs to be accessible
             dirname = os.path.join(experimentDir, project, subject, session)
-        except Exception, err:
+        except Exception as err:
             raise err
     volume = 0.0
     for label in labels:

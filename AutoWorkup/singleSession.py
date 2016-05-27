@@ -32,6 +32,8 @@ Examples:
   $ singleSession.py --rewrite-datasinks --pe OSX --ExperimentConfig my_baw.config 00003
 
 """
+from __future__ import print_function
+from __future__ import absolute_import
 
 
 def _create_singleSession(dataDict, master_config, interpMode, pipeline_name):
@@ -48,7 +50,7 @@ def _create_singleSession(dataDict, master_config, interpMode, pipeline_name):
            'denoise' in master_config['components'] or \
            'landmark' in master_config['components'] or \
            'segmentation' in master_config['components'] or \
-           'malf_2012_neuro' in master_config['components']
+           'jointfusion_2015_wholebrain' in master_config['components']
 
     from nipype import config, logging
 
@@ -66,11 +68,32 @@ def _create_singleSession(dataDict, master_config, interpMode, pipeline_name):
 
     pname = "{0}_{1}_{2}".format(master_config['workflow_phase'], subject, session)
     onlyT1 = not (len(dataDict['T2s']) > 0)
+    if onlyT1:
+        print("T1 Only processing starts ...")
+    else:
+        print("Multimodal processing starts ...")
+
+    doDenoise = False
+    if ('denoise' in master_config['components']):
+        if isBlackList:
+            print("""
+                  Denoise is ignored when the session is in Blacklist
+                  There is known issue that Landmark Detection algorithm
+                  may not work well with denoising step
+                  """)
+            doDenoise = False
+        else:
+            doDenoise = True
+    useEMSP=False
+    if len( dataDict['EMSP']) >0:
+        useEMSP =True
     sessionWorkflow = generate_single_session_template_WF(project, subject, session, onlyT1, master_config,
                                                           phase=master_config['workflow_phase'],
                                                           interpMode=interpMode,
                                                           pipeline_name=pipeline_name,
-                                                          doDenoise=(not isBlackList))
+                                                          doDenoise=doDenoise,
+                                                          badT2=dataDict['BadT2'],
+                                                          useEMSP=useEMSP)
     sessionWorkflow.base_dir = master_config['cachedir']
 
     sessionWorkflow_inputsspec = sessionWorkflow.get_node('inputspec')
@@ -78,13 +101,17 @@ def _create_singleSession(dataDict, master_config, interpMode, pipeline_name):
     sessionWorkflow_inputsspec.inputs.T2s = dataDict['T2s']
     sessionWorkflow_inputsspec.inputs.PDs = dataDict['PDs']
     sessionWorkflow_inputsspec.inputs.FLs = dataDict['FLs']
-    sessionWorkflow_inputsspec.inputs.OTHERs = dataDict['OTs']
+    if useEMSP:
+        sessionWorkflow_inputsspec.inputs.EMSP = dataDict['EMSP'][0]
+    sessionWorkflow_inputsspec.inputs.OTHERs = dataDict['OTHERs']
     return sessionWorkflow
 
 
 def createAndRun(sessions, environment, experiment, pipeline, cluster, useSentinal, dryRun):
     from baw_exp import OpenSubjectDatabase
     from utilities.misc import add_dict
+    from collections import OrderedDict
+    import sys
 
     from workflows.utils import run_workflow
 
@@ -102,20 +129,34 @@ def createAndRun(sessions, environment, experiment, pipeline, cluster, useSentin
             sessions = set(all_sessions)
         else:
             sessions = set(sessions)
-        print "!=" * 40
+        print("!=" * 40)
         print("Doing sessions {0}".format(sessions))
-        print "!=" * 40
+        print("!=" * 40)
         for session in sessions:
-            _dict = {}
+            _dict = OrderedDict()
+            t1_list = database.getFilenamesByScantype(session, ['T1-15', 'T1-30'])
+            if len(t1_list) == 0:
+                print("ERROR: Skipping session {0} for subject {1} due to missing T1's".format(session,subject))
+                print("REMOVE OR FIX BEFORE CONTINUING")
+                continue
             subject = database.getSubjFromSession(session)
             _dict['session'] = session
             _dict['project'] = database.getProjFromSession(session)
             _dict['subject'] = subject
-            _dict['T1s'] = database.getFilenamesByScantype(session, ['T1-15', 'T1-30'])
+            _dict['T1s'] = t1_list
             _dict['T2s'] = database.getFilenamesByScantype(session, ['T2-15', 'T2-30'])
+            _dict['BadT2'] = False
+            if _dict['T2s'] == database.getFilenamesByScantype(session, ['T2-15']):
+                print("This T2 is not going to be used for JointFusion")
+                print("This T2 is not going to be used for JointFusion")
+                print("This T2 is not going to be used for JointFusion")
+                print("This T2 is not going to be used for JointFusion")
+                print(_dict['T2s'])
+                _dict['BadT2'] = True
             _dict['PDs'] = database.getFilenamesByScantype(session, ['PD-15', 'PD-30'])
             _dict['FLs'] = database.getFilenamesByScantype(session, ['FL-15', 'FL-30'])
-            _dict['OTs'] = database.getFilenamesByScantype(session, ['OTHER-15', 'OTHER-30'])
+            _dict['EMSP'] = database.getFilenamesByScantype(session, ['EMSP'])
+            _dict['OTHERs'] = database.getFilenamesByScantype(session, ['OTHER-15', 'OTHER-30'])
             sentinal_file_basedir = os.path.join(
                 master_config['resultdir'],
                 _dict['project'],
@@ -156,28 +197,18 @@ def createAndRun(sessions, environment, experiment, pipeline, cluster, useSentin
                     "WarpedAtlas2Subject",
                     "left_hemisphere_wm.nii.gz"
                 ))
-            if 'malf_2012_neuro' in master_config['components']:
-                sentinal_file_list.append(os.path.join(
-                    sentinal_file_basedir,
-                    "TissueClassify",
-                    "neuro2012_20fusion_merge_seg.nii.gz"
-                ))
-                sentinal_file_list.append(os.path.join(
-                    sentinal_file_basedir,
-                    "TissueClassify",
-                    "fswm_extended_neuro2012_20_merge_seg.nii.gz"
-                ))
-                sentinal_file_list.append(os.path.join(
-                    sentinal_file_basedir,
-                    "TissueClassify",
-                    "fswm_standard_neuro2012_20_merge_seg.nii.gz"
-                ))
-                sentinal_file_list.append(os.path.join(
-                    sentinal_file_basedir,
-                    "TissueClassify",
-                    "fswm_extended_neuro2012_labelmap.png"
-                ))
 
+            if 'jointfusion_2015_wholebrain' in master_config['components']:
+                sentinal_file_list.append(os.path.join(
+                    sentinal_file_basedir,
+                    "TissueClassify",
+                    "JointFusion_HDAtlas20_2015_lobar_label.nii.gz"
+                ))
+                sentinal_file_list.append(os.path.join(
+                    sentinal_file_basedir,
+                    "TissueClassify",
+                    "lobeVolumes_JSON.json"
+                ))
 
             if master_config['workflow_phase'] == 'atlas-based-reference':
                 atlasDirectory = os.path.join(master_config['atlascache'], 'spatialImages', 'rho.nii.gz')
@@ -185,9 +216,9 @@ def createAndRun(sessions, environment, experiment, pipeline, cluster, useSentin
                 atlasDirectory = os.path.join(master_config['previousresult'], subject, 'Atlas', 'AVG_rho.nii.gz')
 
             if os.path.exists(atlasDirectory):
-                print "LOOKING FOR DIRECTORY {0}".format(atlasDirectory)
+                print("LOOKING FOR DIRECTORY {0}".format(atlasDirectory))
             else:
-                print "MISSING REQUIRED ATLAS INPUT {0}".format(atlasDirectory)
+                print("MISSING REQUIRED ATLAS INPUT {0}".format(atlasDirectory))
                 print("SKIPPING: {0} prerequisites missing".format(session))
                 continue
 
@@ -236,9 +267,9 @@ def _SingleSession_main(environment, experiment, pipeline, cluster, **kwds):
     from utilities.configFileParser import nipype_options
 
 
-    print "Copying Atlas directory and determining appropriate Nipype options..."
+    print("Copying Atlas directory and determining appropriate Nipype options...")
     pipeline = nipype_options(kwds, pipeline, cluster, experiment, environment)  # Generate Nipype options
-    print "Getting session(s) from database..."
+    print("Getting session(s) from database...")
     createAndRun(kwds['SESSIONS'], environment, experiment, pipeline, cluster, useSentinal=kwds['--use-sentinal'],
                  dryRun=kwds['--dry-run'])
     return 0
@@ -255,8 +286,8 @@ if __name__ == '__main__':
     from AutoWorkup import setup_environment
 
     argv = docopt(__doc__, version='1.1')
-    print argv
-    print '=' * 100
+    print(argv)
+    print('=' * 100)
     environment, experiment, pipeline, cluster = setup_environment(argv)
 
     exit = _SingleSession_main(environment, experiment, pipeline, cluster, **argv)

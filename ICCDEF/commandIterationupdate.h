@@ -165,12 +165,12 @@ public:
     m_FixedImage = img;
   }
 
-  void Execute(itk::Object *caller, const itk::EventObject & event)
+  void Execute(itk::Object *caller, const itk::EventObject & event) ITK_OVERRIDE
   {
     Execute( (const itk::Object *)caller, event );
   }
 
-  void Execute(const itk::Object *object, const itk::EventObject & event)
+  void Execute(const itk::Object *object, const itk::EventObject & event) ITK_OVERRIDE
   {
     if( !( itk::IterationEvent().CheckEvent( &event ) ) )
       {
@@ -179,7 +179,7 @@ public:
 
     typename DisplacementFieldType::Pointer deffield = 0;
     typename DisplacementFieldType::Pointer backdeffield = 0;
-    unsigned int iter = vcl_numeric_limits<unsigned int>::max();
+    unsigned int iter = std::numeric_limits<unsigned int>::max();
     double       metricbefore = -1.0;
     double       backmetricbefore = -1.0;
 

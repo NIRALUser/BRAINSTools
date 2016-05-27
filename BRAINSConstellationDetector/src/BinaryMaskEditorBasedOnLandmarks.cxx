@@ -24,7 +24,9 @@
 #include "itkImageDuplicator.h"
 #include "itkImageRegionIterator.h"
 #include "itkImageFileWriter.h"
-#include "vcl_algorithm.h"
+#include <vcl_compiler.h>
+#include <iostream>
+#include "algorithm"
 #include "BinaryMaskEditorBasedOnLandmarksCLP.h"
 #include "itkNumberToString.h"
 #include <BRAINSCommonLib.h>
@@ -34,9 +36,9 @@ class ThreeLandmarksForPlane
   // The definition depends on Slicer3LandmarkIO.
   // Point type is simply itk::Pointe<double, 3>
 public:
-  PointType A;
-  PointType B;
-  PointType C;
+  LandmarkPointType A;
+  LandmarkPointType B;
+  LandmarkPointType C;
 
   typedef itk::Point<double, 3> VectorType;
 
@@ -71,7 +73,7 @@ public:
     normal[1] = -1 * ( ( AB[0] * AC[2] ) - ( AC[0] * AB[2] ) );
     normal[2] = ( AB[0] * AC[1] ) - ( AC[0] * AB[1] );
 
-    double magnitude = vcl_sqrt( normal[0] * normal[0]
+    double magnitude = std::sqrt( normal[0] * normal[0]
                                  + normal[1] * normal[1]
                                  + normal[2] * normal[2] );
 
@@ -97,7 +99,7 @@ public:
               << std::endl;
   }
 
-  double GetRelativeLocationToPlane( PointType x )
+  double GetRelativeLocationToPlane( LandmarkPointType x ) const
   {
     double answer =
       normal[0] * ( A[0] - x[0] )
@@ -107,7 +109,7 @@ public:
     return answer;
   }
 
-  VectorType GetNormal()
+  VectorType GetNormal() const
   {
     return normal;
   }
@@ -129,7 +131,7 @@ CutBinaryVolumeByPlaneWithDirection( typename TImageType::Pointer * _imageVolume
   std::cout << __LINE__ << "::" << __FILE__ << std::endl;
   for( it.GoToBegin(); !it.IsAtEnd(); ++it )
     {
-    PointType currentPhysicalLocation;
+    LandmarkPointType currentPhysicalLocation;
     (*_imageVolume)->TransformIndexToPhysicalPoint( it.GetIndex(), currentPhysicalLocation );
 
     if( direction == "true" &&
@@ -149,7 +151,7 @@ CutBinaryVolumeByPlaneWithDirection( typename TImageType::Pointer * _imageVolume
 template <class TImageType>
 void
 CutBinaryVolumeByPointWithDirection( typename TImageType::Pointer * _imageVolume,
-                                     const PointType _landmark,
+                                     const LandmarkPointType & _landmark,
                                      const std::string & _direction )
 {
   // set directional constant for convenient programming
@@ -193,7 +195,7 @@ CutBinaryVolumeByPointWithDirection( typename TImageType::Pointer * _imageVolume
   std::cout << __LINE__ << "::" << __FILE__ << std::endl;
   for( it.GoToBegin(); !it.IsAtEnd(); ++it )
     {
-    PointType currentPhysicalLocation;
+    LandmarkPointType currentPhysicalLocation;
     (*_imageVolume)->TransformIndexToPhysicalPoint( it.GetIndex(), currentPhysicalLocation );
 
     switch( myDirection )
@@ -319,7 +321,7 @@ int main( int argc, char * argv[] )
       std::exit( EXIT_FAILURE );
       }
 
-    PointType currentLdmk = landmarksSet.find( *ldmkIt )->second;
+    LandmarkPointType currentLdmk = landmarksSet.find( *ldmkIt )->second;
     std::cout << "currentLdmk:: " << *ldmkIt << "::"
               << currentLdmk[0] << ", "
               << currentLdmk[1] << ", "
@@ -375,7 +377,7 @@ int main( int argc, char * argv[] )
         std::cerr << "ERROR: Landmark not found: " << *inputLdmrIt << std::endl;
         std::exit( EXIT_FAILURE );
         }
-      PointType currentLandmark = landmarksSet.find( *inputLdmrIt )->second;
+      LandmarkPointType currentLandmark = landmarksSet.find( *inputLdmrIt )->second;
       std::cout << "currentLandmark:: " << *inputLdmrIt << "::"
                 << currentLandmark[0] << ", "
                 << currentLandmark[1] << ", "

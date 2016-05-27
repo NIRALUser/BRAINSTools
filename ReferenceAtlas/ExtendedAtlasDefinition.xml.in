@@ -1,23 +1,23 @@
 <Atlas>
  <AtlasImage>
   <type>T1</type>
-  <filename>@ATLAS_INSTALL_DIRECTORY@/template_t1.nii.gz</filename>
+  <filename>@ATLAS_INSTALL_DIRECTORY@/template_t1_denoised_gaussian.nii.gz</filename>
  </AtlasImage>
  <AtlasImage>
   <type>T2</type>
-  <filename>@ATLAS_INSTALL_DIRECTORY@/template_t2.nii.gz</filename>
+  <filename>@ATLAS_INSTALL_DIRECTORY@/template_t2_denoised_gaussian.nii.gz</filename>
  </AtlasImage>
  <AtlasImage>
   <type>PD</type>
-  <filename>@ATLAS_INSTALL_DIRECTORY@/template_t2.nii.gz</filename>
+  <filename>@ATLAS_INSTALL_DIRECTORY@/template_t2_denoised_gaussian.nii.gz</filename>
  </AtlasImage>
  <AtlasImage>
   <type>FLAIR</type>
-  <filename>@ATLAS_INSTALL_DIRECTORY@/template_t2.nii.gz</filename>
+  <filename>@ATLAS_INSTALL_DIRECTORY@/template_t2_denoised_gaussian.nii.gz</filename>
  </AtlasImage>
  <AtlasImage>
   <type>OTHER</type>
-  <filename>@ATLAS_INSTALL_DIRECTORY@/template_t1.nii.gz</filename>
+  <filename>@ATLAS_INSTALL_DIRECTORY@/template_t1_denoised_gaussian.nii.gz</filename>
  </AtlasImage>
  <BrainMask>
   <filename>@ATLAS_INSTALL_DIRECTORY@/template_brain.nii.gz</filename>
@@ -35,18 +35,18 @@
   <LabelCode>1</LabelCode>
   <bounds>
    <type>T1</type>
-   <lower>0.50</lower>
+   <lower>0.10</lower>
    <upper>1.0</upper>
   </bounds>
   <bounds>
    <type>T2</type>
-   <lower>0.05</lower>
-   <upper>0.70</upper>
+   <lower>0.001</lower>
+   <upper>0.98</upper>
   </bounds>
   <bounds>
    <type>PD</type>
    <lower>0.00</lower>
-   <upper>0.70</upper>
+   <upper>0.98</upper>
   </bounds>
   <bounds>
    <type>FLAIR</type>
@@ -62,7 +62,7 @@
  <Prior>
   <type>SURFGM</type>
   <filename>@ATLAS_INSTALL_DIRECTORY@/GENERATED_SURFGM.nii.gz</filename>
-  <Weight>1</Weight>
+  <Weight>2.5</Weight>
   <GaussianClusterCount>1</GaussianClusterCount>
   <UseForBias>1</UseForBias>
   <IsForegroundPrior>1</IsForegroundPrior>
@@ -70,17 +70,17 @@
   <bounds>
    <type>T1</type>
    <lower>0.04</lower>
-   <upper>0.75</upper>
+   <upper>0.99</upper>
   </bounds>
   <bounds>
    <type>T2</type>
-   <lower>0.25</lower>
-   <upper>0.96</upper>
+   <lower>0.01</lower>
+   <upper>0.98</upper>
   </bounds>
   <bounds>
    <type>PD</type>
    <lower>0.01</lower>
-   <upper>0.98</upper>
+   <upper>0.99</upper>
   </bounds>
   <bounds>
    <type>FLAIR</type>
@@ -104,18 +104,18 @@
   <LabelCode>19</LabelCode>
   <bounds>
    <type>T1</type>
-   <lower>0.05</lower>
-   <upper>0.95</upper>
+   <lower>0.01</lower>
+   <upper>0.99</upper>
   </bounds>
   <bounds>
    <type>T2</type>
-   <lower>0.15</lower>
-   <upper>0.97</upper>
+   <lower>0.02</lower>
+   <upper>0.99</upper>
   </bounds>
   <bounds>
    <type>PD</type>
    <lower>0.01</lower>
-   <upper>0.98</upper>
+   <upper>0.99</upper>
   </bounds>
   <bounds>
    <type>FLAIR</type>
@@ -138,18 +138,18 @@
   <LabelCode>23</LabelCode>
   <bounds>
    <type>T1</type>
-   <lower>0.05</lower>
-   <upper>0.95</upper>
+   <lower>0.01</lower>
+   <upper>0.99</upper>
   </bounds>
   <bounds>
    <type>T2</type>
-   <lower>0.15</lower>
-   <upper>0.97</upper>
+   <lower>0.01</lower>
+   <upper>0.99</upper>
   </bounds>
   <bounds>
    <type>PD</type>
    <lower>0.01</lower>
-   <upper>0.98</upper>
+   <upper>0.99</upper>
   </bounds>
   <bounds>
    <type>FLAIR</type>
@@ -172,18 +172,18 @@
   <LabelCode>24</LabelCode>
   <bounds>
    <type>T1</type>
-   <lower>0.05</lower>
-   <upper>0.95</upper>
+   <lower>0.01</lower>
+   <upper>0.99</upper>
   </bounds>
   <bounds>
    <type>T2</type>
-   <lower>0.15</lower>
-   <upper>0.97</upper>
+   <lower>0.05</lower>
+   <upper>0.98</upper>
   </bounds>
   <bounds>
    <type>PD</type>
    <lower>0.01</lower>
-   <upper>0.98</upper>
+   <upper>0.99</upper>
   </bounds>
   <bounds>
    <type>FLAIR</type>
@@ -207,11 +207,11 @@
   <bounds>
    <type>T1</type>
    <lower>0.05</lower>
-   <upper>0.95</upper>
+   <upper>0.98</upper>
   </bounds>
   <bounds>
    <type>T2</type>
-   <lower>0.15</lower>
+   <lower>0.05</lower>
    <upper>0.97</upper>
   </bounds>
   <bounds>
@@ -241,12 +241,12 @@
   <LabelCode>11</LabelCode>
   <bounds>
    <type>T1</type>
-   <lower>0.03</lower>
-   <upper>0.90</upper>
+   <lower>0.01</lower>
+   <upper>0.99</upper>
   </bounds>
   <bounds>
    <type>T2</type>
-   <lower>0.02</lower>
+   <lower>0.01</lower>
    <upper>0.99</upper>
   </bounds>
   <bounds>
@@ -275,13 +275,13 @@
   <LabelCode>12</LabelCode>
   <bounds>
    <type>T1</type>
-   <lower>0.10</lower>
+   <lower>0.05</lower>
    <upper>1.0</upper>
   </bounds>
   <bounds>
    <type>T2</type>
    <lower>0.03</lower>
-   <upper>0.90</upper>
+   <upper>0.99</upper>
   </bounds>
   <bounds>
    <type>PD</type>
@@ -302,7 +302,7 @@
  <Prior>
   <type>CSF</type>
   <filename>@ATLAS_INSTALL_DIRECTORY@/GENERATED_CSF.nii.gz</filename>
-  <Weight>1</Weight>
+  <Weight>2.5</Weight>
   <GaussianClusterCount>1</GaussianClusterCount>
   <UseForBias>1</UseForBias>
   <IsForegroundPrior>1</IsForegroundPrior>
@@ -310,22 +310,22 @@
   <bounds>
    <type>T1</type>
    <lower>0.00</lower>
-   <upper>0.60</upper>
+   <upper>0.95</upper>
   </bounds>
   <bounds>
    <type>T2</type>
-   <lower>0.20</lower>
+   <lower>0.05</lower>
    <upper>1.0</upper>
   </bounds>
   <bounds>
    <type>PD</type>
-   <lower>0.20</lower>
+   <lower>0.05</lower>
    <upper>1.0</upper>
   </bounds>
   <bounds>
    <type>FLAIR</type>
    <lower>0.0</lower>
-   <upper>0.5</upper>
+   <upper>0.95</upper>
   </bounds>
   <bounds>
    <type>OTHER</type>

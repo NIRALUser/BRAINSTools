@@ -1,15 +1,11 @@
 
 set(proj VTK)
 
-set(${proj}_REQUIRED_VERSION "6.10")  #If a required version is necessary, then set this, else leave blank
-set(VTK_VERSION_MAJOR 6)
+set(${proj}_REQUIRED_VERSION "7.10")  #If a required version is necessary, then set this, else leave blank
+set(VTK_VERSION_MAJOR 7)
 
 # Set dependency list
 set(${proj}_DEPENDENCIES "zlib")
-
-if (${PROJECT_NAME}_USE_PYTHONQT)
-  list(APPEND ${proj}_DEPENDENCIES python)
-endif()
 
 # Include dependent projects if any
 ExternalProject_Include_Dependencies(${proj} PROJECT_VAR proj DEPENDS_VAR ${proj}_DEPENDENCIES)
@@ -37,21 +33,7 @@ if((NOT DEFINED VTK_DIR OR NOT DEFINED VTK_SOURCE_DIR) AND NOT ${CMAKE_PROJECT_N
   set(VTK_WRAP_TCL OFF)
   set(VTK_WRAP_PYTHON OFF)
   set(BUILD_SHARED_LIBS OFF)
-
-  if(${PRIMARY_PROJECT_NAME}_USE_PYTHONQT)
-    set(VTK_WRAP_PYTHON ON)
-  else()
-    set(VTK_WRAP_PYTHON OFF)
-  endif()
-
-  if(${PRIMARY_PROJECT_NAME}_USE_PYTHONQT)
-    list(APPEND EXTERNAL_PROJECT_OPTIONAL_ARGS
-      -DVTK_INSTALL_PYTHON_USING_CMAKE:BOOL=ON
-      -DPYTHON_EXECUTABLE:PATH=${PYTHON_EXECUTABLE}
-      -DPYTHON_INCLUDE_DIR:PATH=${PYTHON_INCLUDE_DIR}
-      -DPYTHON_LIBRARY:FILEPATH=${PYTHON_LIBRARY}
-      )
-  endif()
+  set(VTK_WRAP_PYTHON OFF)
 
   if(NOT APPLE)
     list(APPEND EXTERNAL_PROJECT_OPTIONAL_ARGS
@@ -78,11 +60,6 @@ if((NOT DEFINED VTK_DIR OR NOT DEFINED VTK_SOURCE_DIR) AND NOT ${CMAKE_PROJECT_N
   list(APPEND EXTERNAL_PROJECT_OPTIONAL_ARGS
       -DModule_vtkGUISupportQt:BOOL=${${PRIMARY_PROJECT_NAME}_USE_QT}
       -DModule_vtkGUISupportQtOpenGL:BOOL=${${PRIMARY_PROJECT_NAME}_USE_QT})
-
-  # Disable Tk when Python wrapping is enabled
-  if(${PRIMARY_PROJECT_NAME}_USE_PYTHONQT)
-    list(APPEND EXTERNAL_PROJECT_OPTIONAL_ARGS -DVTK_USE_TK:BOOL=OFF)
-  endif()
 
   if(VTK_WRAP_TCL)
     list(APPEND EXTERNAL_PROJECT_OPTIONAL_ARGS
@@ -125,7 +102,7 @@ if((NOT DEFINED VTK_DIR OR NOT DEFINED VTK_SOURCE_DIR) AND NOT ${CMAKE_PROJECT_N
   # set(${proj}_GIT_REPOSITORY "${git_protocol}://github.com/Slicer/VTK.git" CACHE STRING "Repository from which to get VTK" FORCE)
   # set(${proj}_GIT_TAG "ea7cdc4e0b399be244e79392c67fed068c33e454")  # VTK 20141221
   set(${proj}_GIT_REPOSITORY "${git_protocol}://vtk.org/VTK.git" CACHE STRING "Repository from which to get VTK" FORCE)
-  set(${proj}_GIT_TAG "a96660c5bbd8eb5dba5e30a917e9c517a78f8b61")  # VTK 20150502
+  set(${proj}_GIT_TAG "52d45496877b00852a08a5b9819d109c2fd9bfab")  # VTK 20160314
 
   ExternalProject_Add(${proj}
     ${${proj}_EP_ARGS}
@@ -141,6 +118,7 @@ if((NOT DEFINED VTK_DIR OR NOT DEFINED VTK_SOURCE_DIR) AND NOT ${CMAKE_PROJECT_N
       -DCMAKE_CXX_FLAGS:STRING=${ep_common_cxx_flags}
       -DCMAKE_C_COMPILER:FILEPATH=${CMAKE_C_COMPILER}
       -DCMAKE_C_FLAGS:STRING=${ep_common_c_flags}
+      -DCMAKE_CXX_STANDARD:STRING=${CMAKE_CXX_STANDARD}
       -DCMAKE_INSTALL_PREFIX:PATH=${CMAKE_CURRENT_BINARY_DIR}/${proj}-install
       -DCMAKE_INCLUDE_DIRECTORIES_BEFORE:BOOL=OFF
       -DBUILD_TESTING:BOOL=OFF
@@ -150,12 +128,15 @@ if((NOT DEFINED VTK_DIR OR NOT DEFINED VTK_SOURCE_DIR) AND NOT ${CMAKE_PROJECT_N
       -DVTK_DEBUG_LEAKS:BOOL=${VTK_DEBUG_LEAKS}
       -DVTK_LEGACY_REMOVE:BOOL=ON
       -DVTK_WRAP_TCL:BOOL=${VTK_WRAP_TCL}
-      -DVTK_WRAP_PYTHON:BOOL=${VTK_WRAP_PYTHON}
       -DModule_vtkIOXML:BOOL=ON
       -DModule_vtkIOXMLParser:BOOL=ON
-      ${VTK_PYTHON_ARGS}
       ${VTK_QT_ARGS}
       ${VTK_MAC_ARGS}
+      # ZLIB
+      -D${proj}_USE_SYSTEM_ZLIB:BOOL=ON
+      -DZLIB_ROOT:PATH=${ZLIB_ROOT}
+      -DZLIB_INCLUDE_DIR:PATH=${ZLIB_INCLUDE_DIR}
+      -DZLIB_LIBRARY:FILEPATH=${ZLIB_LIBRARY}
       INSTALL_COMMAND ""
     )
   ### --- End Project specific additions

@@ -1,3 +1,4 @@
+from __future__ import print_function
 __author__ = 'johnsonhj'
 
 ######################################################################################
@@ -6,6 +7,8 @@ __author__ = 'johnsonhj'
 # print sys.path
 from nipype import config  # NOTE:  This needs to occur AFTER the PYTHON_AUX_PATHS has been modified
 config.enable_debug_mode()  # NOTE:  This needs to occur AFTER the PYTHON_AUX_PATHS has been modified
+#config.enable_provenance()
+
 ##############################################################################
 from nipype.interfaces.base import CommandLine, CommandLineInputSpec, TraitedSpec, File, Directory
 from nipype.interfaces.base import traits, isdefined, BaseInterface
@@ -38,9 +41,9 @@ PROGRAM_PATHS = PROGRAM_PATHS.split(':')
 PROGRAM_PATHS.extend(os.environ['PATH'].split(':'))
 os.environ['PATH'] = ':'.join(PROGRAM_PATHS)
 
-from SEMTools import *
+from nipype.interfaces.semtools import *
 
-print "Building Pipeline"
+print("Building Pipeline")
 ########### PIPELINE INITIALIZATION #############
 DWI_AutoProcess = pe.Workflow(name="DWI_20130515")  # HACK: This needs to be specified in the config file.
 DWI_AutoProcess.config['execution'] = {
@@ -51,7 +54,7 @@ DWI_AutoProcess.config['execution'] = {
     'stop_on_first_rerun': 'false',  # This stops at first attempt to rerun, before running, and before deleting previous results.
     'hash_method': 'timestamp',
     'single_thread_matlab': 'true',  # Multi-core 2011a  multi-core for matrix multiplication.
-    'remove_unnecessary_outputs': 'false',
+    'remove_unnecessary_outputs': 'true', #remove any interface outputs not needed by the workflow
     'use_relative_paths': 'false',  # relative paths should be on, require hash update when changed.
     'remove_node_directories': 'false',  # Experimental
     'local_hash_check': 'true',

@@ -1,3 +1,4 @@
+from __future__ import print_function
 import sys
 import os
 import errno
@@ -45,7 +46,7 @@ def addToSysPath(index, path):
 
 # Modify the PATH for python modules
 addToSysPath(0, '/scratch/johnsonhj/src/NEP-11/NIPYPE')
-addToSysPath(0, '/scratch/johnsonhj/src/NEP-11/BRAINSTools/AutoWorkup/SEMTools')
+addToSysPath(0, '/scratch/johnsonhj/src/NEP-11/BRAINSTools/AutoWorkup/semtools')
 addToSysPath(1, '/scratch/johnsonhj/src/NEP-11/BRAINSTools/AutoWorkup')
 addToSysPath(1, '/scratch/johnsonhj/src/NEP-11/BRAINSTools')
 
@@ -71,7 +72,7 @@ from nipype.interfaces.ants import (
     AverageImages, MultiplyImages,
     AverageAffineTransform)
 
-from SEMTools import *
+from nipype.interfaces.semtools import *
 
 import yaml
 
@@ -80,7 +81,7 @@ import yaml
 with open(sys.argv[1],'r') as paramFptr:
    ExperimentInfo = yaml.safe_load(paramFptr)
 
-print ExperimentInfo
+print(ExperimentInfo)
 # del WDIR
 
 def mkdir_p(path):
@@ -106,7 +107,7 @@ minipigWF.config['execution'] = {
 # This stops at first attempt to rerun, before running, and before deleting previous results.
     'hash_method': 'timestamp',
     'single_thread_matlab': 'true',  # Multi-core 2011a  multi-core for matrix multip  lication.
-    'remove_unnecessary_outputs': 'false',
+    'remove_unnecessary_outputs': 'true', #remove any interface outputs not needed by the workflow
     'use_relative_paths': 'false',  # relative paths should be on, require hash updat  e when changed.
     'remove_node_directories': 'false',  # Experimental
     'local_hash_check': 'true',
@@ -318,7 +319,9 @@ BeginANTS.inputs.output_warped_image = 'atlas2subject.nii.gz'
 BeginANTS.inputs.output_inverse_warped_image = 'subject2atlas.nii.gz'
 BeginANTS.inputs.save_state = 'SavedBeginANTSSyNState.h5'
 BeginANTS.inputs.float = True
+BeginANTS.inputs.num_threads = -1 # Tell nipype to respect qsub envirionmental variable NSLOTS
 BeginANTS.inputs.args = "--verbose"
+BeginANTS.inputs.invert_initial_moving_transform = False
 
 minipigWF.connect(chopT2, 'outFN', BeginANTS, "fixed_image")
 minipigWF.connect(fixAtlas, 'outFN', BeginANTS, "moving_image")
@@ -371,6 +374,7 @@ BeginANTS2.inputs.output_warped_image = 'atlas2subjectMultiModal.nii.gz'
 BeginANTS2.inputs.output_inverse_warped_image = 'subject2atlasMultiModal.nii.gz'
 BeginANTS2.inputs.save_state = 'SavedBeginANTSSyNState.h5'
 BeginANTS2.inputs.float = True
+BeginANTS2.inputs.num_threads = -1 # Tell nipype to respect qsub envirionmental variable NSLOTS
 BeginANTS2.inputs.args = "--verbose"
 
 minipigWF.connect(SubjectMakeVector, 'outFNs', BeginANTS2, "fixed_image")
@@ -388,7 +392,7 @@ ResampleLabelMap = pe.Node(BRAINSResample(), name="ResampleLabelMap")
 ResampleLabelMap.inputs.pixelType = 'ushort'
 ResampleLabelMap.inputs.interpolationMode = 'NearestNeighbor'
 ResampleLabelMap.inputs.outputVolume = 'ResampleLabelMap.nii.gz'
-minipigWF.connect([(BeginANTS2, ResampleLabelMap, [(('composite_transform', getListIndex, 0), 'warpTransform')])])
+minipigWF.connect([(BeginANTS2, ResampleLabelMap, [('composite_transform', 'warpTransform')])])
 
 minipigWF.connect(input_spec, 'Domestic_LabelMap', ResampleLabelMap, 'inputVolume')
 minipigWF.connect(T1DynFix, 'outFN', ResampleLabelMap, 'referenceVolume')

@@ -139,7 +139,7 @@ ValidateTransformRankOrdering(const std::vector<std::string> & transformType)
 }
 
 template <class FixedImageType, class MovingImageType, class TransformType,
-          class SpecificInitializerType, typename MetricType>
+          class SpecificInitializerType, typename DoCenteredInitializationMetricType>
 typename TransformType::Pointer
 DoCenteredInitialization( typename FixedImageType::Pointer & orientedFixedVolume,
                           typename MovingImageType::Pointer & orientedMovingVolume,
@@ -150,7 +150,7 @@ DoCenteredInitialization( typename FixedImageType::Pointer & orientedFixedVolume
                                                                     // variable,  the Mask is updated by
                                                                     // this function
                           std::string & initializeTransformMode,
-                          typename MetricType::Pointer & CostMetricObject )
+                          typename DoCenteredInitializationMetricType::Pointer & CostMetricObject )
 {
   typedef itk::Image<unsigned char, 3>                               MaskImageType;
   typedef itk::ImageMaskSpatialObject<MaskImageType::ImageDimension> ImageMaskSpatialObjectType;
@@ -173,114 +173,127 @@ DoCenteredInitialization( typename FixedImageType::Pointer & orientedFixedVolume
     CenteredInitializer->GeometryOn();              // Use the image spce center
     CenteredInitializer->InitializeTransform();
     }
-  else if( initializeTransformMode == "useCenterOfROIAlign" )
+  else if( initializeTransformMode == "useCenterOfROIAlign"
+           || initializeTransformMode == "useCenterOfHeadAlign")
     {
-    if( movingMask.IsNull() || fixedMask.IsNull() )
-      {
-      itkGenericExceptionMacro(<< "FAILURE:  Improper mode for initializeTransformMode: "
-                               << initializeTransformMode);
-      }
 
     typedef typename itk::ImageMaskSpatialObject<FixedImageType::ImageDimension> CROIImageMaskSpatialObjectType;
     typedef itk::Image<unsigned char, 3>                                         CROIMaskImageType;
     typename MovingImageType::PointType movingCenter;
     typename FixedImageType::PointType fixedCenter;
 
-    typename CROIImageMaskSpatialObjectType::Pointer movingImageMask(
-      dynamic_cast<CROIImageMaskSpatialObjectType *>( movingMask.GetPointer() ) );
-    typename CROIMaskImageType::Pointer tempOutputMovingVolumeROI =
-      const_cast<CROIMaskImageType *>( movingImageMask->GetImage() );
-
-    typename CROIImageMaskSpatialObjectType::Pointer fixedImageMask(
-      dynamic_cast<CROIImageMaskSpatialObjectType *>( fixedMask.GetPointer() ) );
-    typename CROIMaskImageType::Pointer tempOutputFixedVolumeROI =
-      const_cast<CROIMaskImageType *>( fixedImageMask->GetImage() );
-    typedef itk::CastImageFilter<CROIMaskImageType, FixedImageType>  MaskToFixedCastType;
-    typedef itk::CastImageFilter<CROIMaskImageType, MovingImageType> MaskToMovingCastType;
-
-    typename MaskToFixedCastType::Pointer mask2fixedCast = MaskToFixedCastType::New();
-    typename MaskToMovingCastType::Pointer mask2movingCast = MaskToMovingCastType::New();
-
-    mask2fixedCast->SetInput(tempOutputFixedVolumeROI);
-    mask2fixedCast->Update();
-
-    mask2movingCast->SetInput(tempOutputMovingVolumeROI);
-    mask2movingCast->Update();
-
-    typename SpecificInitializerType::Pointer CenteredInitializer =
-      SpecificInitializerType::New();
-
-    CenteredInitializer->SetFixedImage(mask2fixedCast->GetOutput() );
-    CenteredInitializer->SetMovingImage(mask2movingCast->GetOutput() );
-    CenteredInitializer->SetTransform(initialITKTransform);
-    CenteredInitializer->MomentsOn();              // Use intensity center of
-                                                   // mass
-
-    CenteredInitializer->InitializeTransform();
-    }
-  else if( initializeTransformMode == "useCenterOfHeadAlign" )
-    {
-    typedef itk::Image<unsigned char, 3> CHMMaskImageType;
-    typename MovingImageType::PointType movingCenter;
-    typename FixedImageType::PointType fixedCenter;
-
-    typedef typename itk::FindCenterOfBrainFilter<MovingImageType>
-      MovingFindCenterFilter;
-    typename MovingFindCenterFilter::Pointer movingFindCenter =
-      MovingFindCenterFilter::New();
-    movingFindCenter->SetInput(orientedMovingVolume);
-    if( movingMask.IsNotNull() )
+    if(initializeTransformMode == "useCenterOfROIAlign")
       {
-      typename ImageMaskSpatialObjectType::Pointer movingImageMask(
-        dynamic_cast<ImageMaskSpatialObjectType *>( movingMask.GetPointer() ) );
-      typename CHMMaskImageType::Pointer tempOutputMovingVolumeROI =
-        const_cast<CHMMaskImageType *>( movingImageMask->GetImage() );
-      movingFindCenter->SetImageMask(tempOutputMovingVolumeROI);
-      }
-    movingFindCenter->Update();
-    movingCenter = movingFindCenter->GetCenterOfBrain();
-      {
-      // convert mask image to mask
-      typename ImageMaskSpatialObjectType::Pointer mask = ImageMaskSpatialObjectType::New();
-      mask->SetImage( movingFindCenter->GetClippedImageMask() );
 
-      mask->ComputeObjectToWorldTransform();
-      typename SpatialObjectType::Pointer p = dynamic_cast<SpatialObjectType *>( mask.GetPointer() );
-      if( p.IsNull() )
+      if( movingMask.IsNull() || fixedMask.IsNull() )
         {
-        itkGenericExceptionMacro(<< "Can't convert mask pointer to SpatialObject");
+        itkGenericExceptionMacro(<< "FAILURE:  Improper mode for initializeTransformMode: "
+                                 << initializeTransformMode);
         }
-      movingMask = p;
+
+      typedef itk::StatisticsLabelObject< unsigned char, 3 > LabelObjectType;
+      typedef itk::LabelImageToStatisticsLabelMapFilter< MaskImageType, MaskImageType >
+        LabelStatisticsFilterType;
+
+      typename CROIImageMaskSpatialObjectType::Pointer movingImageMask(
+        dynamic_cast<CROIImageMaskSpatialObjectType *>( movingMask.GetPointer() ) );
+      typename CROIMaskImageType::Pointer tempOutputMovingVolumeROI =
+        const_cast<CROIMaskImageType *>( movingImageMask->GetImage() );
+
+      typename CROIImageMaskSpatialObjectType::Pointer fixedImageMask(
+        dynamic_cast<CROIImageMaskSpatialObjectType *>( fixedMask.GetPointer() ) );
+      typename CROIMaskImageType::Pointer tempOutputFixedVolumeROI =
+        const_cast<CROIMaskImageType *>( fixedImageMask->GetImage() );
+
+      LabelStatisticsFilterType::Pointer movingImageToLabel = LabelStatisticsFilterType::New();
+      movingImageToLabel->SetInput( movingImageMask->GetImage() );
+      movingImageToLabel->SetFeatureImage( movingImageMask->GetImage() );
+      movingImageToLabel->SetComputePerimeter(false);
+      movingImageToLabel->Update();
+
+      LabelStatisticsFilterType::Pointer fixedImageToLabel = LabelStatisticsFilterType::New();
+      fixedImageToLabel->SetInput( fixedImageMask->GetImage() );
+      fixedImageToLabel->SetFeatureImage( fixedImageMask->GetImage() );
+      fixedImageToLabel->SetComputePerimeter(false);
+      fixedImageToLabel->Update();
+
+      LabelObjectType *movingLabel = movingImageToLabel->GetOutput()->GetNthLabelObject(0);
+      LabelObjectType *fixedLabel = fixedImageToLabel->GetOutput()->GetNthLabelObject(0);
+
+      LabelObjectType::CentroidType movingCentroid = movingLabel->GetCentroid();
+      LabelObjectType::CentroidType fixedCentroid = fixedLabel->GetCentroid();
+
+      movingCenter[0] = movingCentroid[0];
+      movingCenter[1] = movingCentroid[1];
+      movingCenter[2] = movingCentroid[2];
+
+      fixedCenter[0] = fixedCentroid[0];
+      fixedCenter[1] = fixedCentroid[1];
+      fixedCenter[2] = fixedCentroid[2];
+
       }
-
-    typedef typename itk::FindCenterOfBrainFilter<FixedImageType>
-      FixedFindCenterFilter;
-    typename FixedFindCenterFilter::Pointer fixedFindCenter =
-      FixedFindCenterFilter::New();
-    fixedFindCenter->SetInput(orientedFixedVolume);
-    if( fixedMask.IsNotNull() )
+    else if( initializeTransformMode == "useCenterOfHeadAlign" )
       {
-      typename ImageMaskSpatialObjectType::Pointer fixedImageMask(
-        dynamic_cast<ImageMaskSpatialObjectType *>( fixedMask.GetPointer() ) );
-      typename CHMMaskImageType::Pointer tempOutputFixedVolumeROI =
-        const_cast<CHMMaskImageType *>( fixedImageMask->GetImage() );
-      fixedFindCenter->SetImageMask(tempOutputFixedVolumeROI);
-      }
-    fixedFindCenter->Update();
-    fixedCenter = fixedFindCenter->GetCenterOfBrain();
+      typedef itk::Image<unsigned char, 3> CHMMaskImageType;
 
-      {
-      // convert mask image to mask
-      typename ImageMaskSpatialObjectType::Pointer mask = ImageMaskSpatialObjectType::New();
-      mask->SetImage( fixedFindCenter->GetClippedImageMask() );
-
-      mask->ComputeObjectToWorldTransform();
-      typename SpatialObjectType::Pointer p = dynamic_cast<SpatialObjectType *>( mask.GetPointer() );
-      if( p.IsNull() )
+      typedef typename itk::FindCenterOfBrainFilter<MovingImageType>
+        MovingFindCenterFilter;
+      typename MovingFindCenterFilter::Pointer movingFindCenter =
+        MovingFindCenterFilter::New();
+      movingFindCenter->SetInput(orientedMovingVolume);
+      if( movingMask.IsNotNull() )
         {
-        itkGenericExceptionMacro(<< "Can't convert mask pointer to SpatialObject");
+        typename ImageMaskSpatialObjectType::Pointer movingImageMask(
+          dynamic_cast<ImageMaskSpatialObjectType *>( movingMask.GetPointer() ) );
+        typename CHMMaskImageType::Pointer tempOutputMovingVolumeROI =
+          const_cast<CHMMaskImageType *>( movingImageMask->GetImage() );
+        movingFindCenter->SetImageMask(tempOutputMovingVolumeROI);
         }
-      fixedMask = p;
+      movingFindCenter->Update();
+      movingCenter = movingFindCenter->GetCenterOfBrain();
+        {
+        // convert mask image to mask
+        typename ImageMaskSpatialObjectType::Pointer mask = ImageMaskSpatialObjectType::New();
+        mask->SetImage( movingFindCenter->GetClippedImageMask() );
+
+        mask->ComputeObjectToWorldTransform();
+        typename SpatialObjectType::Pointer p = dynamic_cast<SpatialObjectType *>( mask.GetPointer() );
+        if( p.IsNull() )
+          {
+          itkGenericExceptionMacro(<< "Can't convert mask pointer to SpatialObject");
+          }
+        movingMask = p;
+        }
+
+      typedef typename itk::FindCenterOfBrainFilter<FixedImageType>
+        FixedFindCenterFilter;
+      typename FixedFindCenterFilter::Pointer fixedFindCenter =
+        FixedFindCenterFilter::New();
+      fixedFindCenter->SetInput(orientedFixedVolume);
+      if( fixedMask.IsNotNull() )
+        {
+        typename ImageMaskSpatialObjectType::Pointer fixedImageMask(
+          dynamic_cast<ImageMaskSpatialObjectType *>( fixedMask.GetPointer() ) );
+        typename CHMMaskImageType::Pointer tempOutputFixedVolumeROI =
+          const_cast<CHMMaskImageType *>( fixedImageMask->GetImage() );
+        fixedFindCenter->SetImageMask(tempOutputFixedVolumeROI);
+        }
+      fixedFindCenter->Update();
+      fixedCenter = fixedFindCenter->GetCenterOfBrain();
+
+        {
+        // convert mask image to mask
+        typename ImageMaskSpatialObjectType::Pointer mask = ImageMaskSpatialObjectType::New();
+        mask->SetImage( fixedFindCenter->GetClippedImageMask() );
+
+        mask->ComputeObjectToWorldTransform();
+        typename SpatialObjectType::Pointer p = dynamic_cast<SpatialObjectType *>( mask.GetPointer() );
+        if( p.IsNull() )
+          {
+          itkGenericExceptionMacro(<< "Can't convert mask pointer to SpatialObject");
+          }
+        fixedMask = p;
+        }
       }
 
     const double movingHeadScaleGuessRatio = 1;
@@ -298,13 +311,14 @@ DoCenteredInitialization( typename FixedImageType::Pointer & orientedFixedVolume
       translationVector[i] = movingCenter[i] - fixedCenter[i];
       scaleValue[i] = movingHeadScaleGuessRatio;
       }
+
     typedef itk::Euler3DTransform<double> EulerAngle3DTransformType;
     typename EulerAngle3DTransformType::Pointer bestEulerAngles3D = EulerAngle3DTransformType::New();
     bestEulerAngles3D->SetCenter(rotationCenter);
     bestEulerAngles3D->SetTranslation(translationVector);
 
-    typedef itk::Euler3DTransform<double> EulerAngle3DTransformType;
     typename EulerAngle3DTransformType::Pointer currentEulerAngles3D = EulerAngle3DTransformType::New();
+
     currentEulerAngles3D->SetCenter(rotationCenter);
     currentEulerAngles3D->SetTranslation(translationVector);
 
@@ -560,7 +574,7 @@ BRAINSFitHelperTemplate<FixedImageType, MovingImageType>::BRAINSFitHelperTemplat
 }
 
 template <class FixedImageType, class MovingImageType>
-template <class TransformType, class OptimizerType, class MetricType>
+template <class TransformType, class OptimizerType, class FitCommonCodeMetricType>
 void
 BRAINSFitHelperTemplate<FixedImageType, MovingImageType>::FitCommonCode(
   int numberOfIterations,
@@ -573,7 +587,7 @@ BRAINSFitHelperTemplate<FixedImageType, MovingImageType>::FitCommonCode(
      OptimizerType,
      FixedImageType,
      MovingImageType,
-     MetricType> MultiModal3DMutualRegistrationHelperType;
+     FitCommonCodeMetricType> MultiModal3DMutualRegistrationHelperType;
 
   typename MultiModal3DMutualRegistrationHelperType::Pointer
   appMutualRegistration = MultiModal3DMutualRegistrationHelperType::New();
@@ -643,10 +657,15 @@ BRAINSFitHelperTemplate<FixedImageType, MovingImageType>::FitCommonCode(
   this->m_CurrentGenericTransform->ClearTransformQueue();
 
   typename CompositeTransformType::Pointer compToAdd;
-  typename CompositeTransformType::ConstPointer compXfrm =
-                            dynamic_cast<const CompositeTransformType *>( finalTransform.GetPointer() );
-  if( compXfrm.IsNotNull() )
+  std::string transformFileType;
+  if ( finalTransform.IsNotNull() )
     {
+    transformFileType = finalTransform->GetNameOfClass();
+    }
+  if( transformFileType == "CompositeTransform" )
+    {
+    typename CompositeTransformType::ConstPointer compXfrm =
+                              static_cast<const CompositeTransformType *>( finalTransform.GetPointer() );
     compToAdd = compXfrm->Clone();
     this->m_CurrentGenericTransform = compToAdd;
     }
@@ -835,11 +854,7 @@ BRAINSFitHelperTemplate<FixedImageType, MovingImageType>::Update(void)
           if( transformFileType == "VersorRigid3DTransform" )
             {
             const itk::VersorRigid3DTransform<double>::ConstPointer tempInitializerITKTransform =
-            dynamic_cast<VersorRigid3DTransformType const *>( currInitTransformFormGenericComposite.GetPointer() );
-            if( tempInitializerITKTransform.IsNull() )
-              {
-              std::cout << "Error in type conversion" << __FILE__ << __LINE__ << std::endl;
-              }
+            static_cast<VersorRigid3DTransformType const *>( currInitTransformFormGenericComposite.GetPointer() );
             AssignRigid::AssignConvertedTransform(initialITKTransform,
                                                   tempInitializerITKTransform);
             }
@@ -924,22 +939,14 @@ BRAINSFitHelperTemplate<FixedImageType, MovingImageType>::Update(void)
           if( transformFileType == "VersorRigid3DTransform" )
             {
             const VersorRigid3DTransformType::ConstPointer tempInitializerITKTransform =
-              dynamic_cast<VersorRigid3DTransformType const *>( currInitTransformFormGenericComposite.GetPointer() );
-            if( tempInitializerITKTransform.IsNull() )
-              {
-              std::cout << "Error in type conversion" << __FILE__ << __LINE__ << std::endl;
-              }
+              static_cast<VersorRigid3DTransformType const *>( currInitTransformFormGenericComposite.GetPointer() );
             AssignRigid::AssignConvertedTransform(initialITKTransform,
                                                   tempInitializerITKTransform);
             }
           else if( transformFileType == "ScaleVersor3DTransform" )
             {
             const itk::ScaleVersor3DTransform<double>::ConstPointer tempInitializerITKTransform =
-              dynamic_cast<itk::ScaleVersor3DTransform<double> const *>( currInitTransformFormGenericComposite.GetPointer() );
-            if( tempInitializerITKTransform.IsNull() )
-              {
-              std::cout << "Error in type conversion" << __FILE__ << __LINE__ << std::endl;
-              }
+              static_cast<itk::ScaleVersor3DTransform<double> const *>( currInitTransformFormGenericComposite.GetPointer() );
             AssignRigid::AssignConvertedTransform(initialITKTransform,
                                                   tempInitializerITKTransform);
             }
@@ -1026,33 +1033,21 @@ BRAINSFitHelperTemplate<FixedImageType, MovingImageType>::Update(void)
           if( transformFileType == "VersorRigid3DTransform" )
             {
             const VersorRigid3DTransformType::ConstPointer tempInitializerITKTransform =
-              dynamic_cast<VersorRigid3DTransformType const *>( currInitTransformFormGenericComposite.GetPointer() );
-            if( tempInitializerITKTransform.IsNull() )
-              {
-              std::cout << "Error in type conversion" << __FILE__ << __LINE__ << std::endl;
-              }
+              static_cast<VersorRigid3DTransformType const *>( currInitTransformFormGenericComposite.GetPointer() );
             AssignRigid::AssignConvertedTransform(initialITKTransform,
                                                   tempInitializerITKTransform);
             }
           else if( transformFileType == "ScaleVersor3DTransform" )
             {
             const itk::ScaleVersor3DTransform<double>::ConstPointer tempInitializerITKTransform =
-              dynamic_cast<itk::ScaleVersor3DTransform<double> const *>( currInitTransformFormGenericComposite.GetPointer() );
-            if( tempInitializerITKTransform.IsNull() )
-              {
-              std::cout << "Error in type conversion" << __FILE__ << __LINE__ << std::endl;
-              }
+              static_cast<itk::ScaleVersor3DTransform<double> const *>( currInitTransformFormGenericComposite.GetPointer() );
             AssignRigid::AssignConvertedTransform(initialITKTransform,
                                                   tempInitializerITKTransform);
             }
           else if( transformFileType == "ScaleSkewVersor3DTransform" )
             {
             const itk::ScaleSkewVersor3DTransform<double>::ConstPointer tempInitializerITKTransform =
-              dynamic_cast<itk::ScaleSkewVersor3DTransform<double> const *>( currInitTransformFormGenericComposite.GetPointer() );
-            if( tempInitializerITKTransform.IsNull() )
-              {
-              std::cout << "Error in type conversion" << __FILE__ << __LINE__ << std::endl;
-              }
+              static_cast<itk::ScaleSkewVersor3DTransform<double> const *>( currInitTransformFormGenericComposite.GetPointer() );
             AssignRigid::AssignConvertedTransform(initialITKTransform,
                                                   tempInitializerITKTransform);
             }
@@ -1134,44 +1129,28 @@ BRAINSFitHelperTemplate<FixedImageType, MovingImageType>::Update(void)
           if( transformFileType == "VersorRigid3DTransform" )
             {
             const VersorRigid3DTransformType::ConstPointer tempInitializerITKTransform =
-              dynamic_cast<VersorRigid3DTransformType const *>( currInitTransformFormGenericComposite.GetPointer() );
-            if( tempInitializerITKTransform.IsNull() )
-              {
-              std::cout << "Error in type conversion" << __FILE__ << __LINE__ << std::endl;
-              }
+              static_cast<VersorRigid3DTransformType const *>( currInitTransformFormGenericComposite.GetPointer() );
             AssignRigid::AssignConvertedTransform(initialITKTransform,
                                                   tempInitializerITKTransform);
             }
           else if( transformFileType == "ScaleVersor3DTransform" )
             {
             const itk::ScaleVersor3DTransform<double>::ConstPointer tempInitializerITKTransform =
-              dynamic_cast<itk::ScaleVersor3DTransform<double> const *>( currInitTransformFormGenericComposite.GetPointer() );
-            if( tempInitializerITKTransform.IsNull() )
-              {
-              std::cout << "Error in type conversion" << __FILE__ << __LINE__ << std::endl;
-              }
+              static_cast<itk::ScaleVersor3DTransform<double> const *>( currInitTransformFormGenericComposite.GetPointer() );
             AssignRigid::AssignConvertedTransform(initialITKTransform,
                                                   tempInitializerITKTransform);
             }
           else if( transformFileType == "ScaleSkewVersor3DTransform" )
             {
             const itk::ScaleSkewVersor3DTransform<double>::ConstPointer tempInitializerITKTransform =
-              dynamic_cast<itk::ScaleSkewVersor3DTransform<double> const *>( currInitTransformFormGenericComposite.GetPointer() );
-            if( tempInitializerITKTransform.IsNull() )
-              {
-              std::cout << "Error in type conversion" << __FILE__ << __LINE__ << std::endl;
-              }
+              static_cast<itk::ScaleSkewVersor3DTransform<double> const *>( currInitTransformFormGenericComposite.GetPointer() );
             AssignRigid::AssignConvertedTransform(initialITKTransform,
                                                   tempInitializerITKTransform);
             }
           else if( transformFileType == "AffineTransform" )
             {
             const typename AffineTransformType::ConstPointer tempInitializerITKTransform =
-              dynamic_cast<AffineTransformType const *>( currInitTransformFormGenericComposite.GetPointer() );
-            if( tempInitializerITKTransform.IsNull() )
-              {
-              std::cout << "Error in type conversion" << __FILE__ << __LINE__ << std::endl;
-              }
+              static_cast<AffineTransformType const *>( currInitTransformFormGenericComposite.GetPointer() );
             AssignRigid::AssignConvertedTransform(initialITKTransform,
                                                   tempInitializerITKTransform);
             }
@@ -1343,7 +1322,7 @@ BRAINSFitHelperTemplate<FixedImageType, MovingImageType>::Update(void)
       // fixed image mask.
 
       OptimizerBoundSelectionType boundSelect( bsplineTx->GetNumberOfParameters() );
-      if( vcl_abs(m_MaxBSplineDisplacement) < 1e-12 )
+      if( std::abs(m_MaxBSplineDisplacement) < 1e-12 )
         {
         boundSelect.Fill( LBFGSBOptimizerType::UNBOUNDED );
         }
@@ -1637,18 +1616,39 @@ BRAINSFitHelperTemplate<FixedImageType, MovingImageType>::Update(void)
             unsigned int numTransforms = internalSyNSavedState->GetNumberOfTransforms();
             // If the last two transforms are displacement field transforms,
             // we add their inverse displacement field to the saved state composite.
-            typedef itk::DisplacementFieldTransform<double, 3>                  DisplacementFieldTransformType;
-            DisplacementFieldTransformType::Pointer oneToEndTransform =
-              dynamic_cast<DisplacementFieldTransformType *>( internalSyNSavedState->GetNthTransform( numTransforms-2 ).GetPointer() );
-            DisplacementFieldTransformType::Pointer endTransform =
-              dynamic_cast<DisplacementFieldTransformType *>( internalSyNSavedState->GetNthTransform( numTransforms-1 ).GetPointer() );
-            if( oneToEndTransform && oneToEndTransform->GetInverseDisplacementField()
-               && endTransform && endTransform->GetInverseDisplacementField() )
+
+            typename CompositeTransformType::TransformType::Pointer oneToEndTransformGeneric =
+                internalSyNSavedState->GetNthTransform( numTransforms-2 ).GetPointer();
+            std::string oneToEndTransformFileType;
+            if ( oneToEndTransformGeneric.IsNotNull() )
               {
-              internalSyNSavedState->RemoveTransform();
-              internalSyNSavedState->AddTransform( oneToEndTransform->GetInverseTransform() );
-              internalSyNSavedState->AddTransform( endTransform );
-              internalSyNSavedState->AddTransform( endTransform->GetInverseTransform() );
+              oneToEndTransformFileType = oneToEndTransformGeneric->GetNameOfClass();
+              }
+
+            typename CompositeTransformType::TransformType::Pointer endTransformGeneric =
+                internalSyNSavedState->GetNthTransform( numTransforms-1 ).GetPointer();
+            std::string endTransformFileType;
+            if ( endTransformGeneric.IsNotNull() )
+              {
+              endTransformFileType = endTransformGeneric->GetNameOfClass();
+              }
+
+            if( oneToEndTransformFileType == "DisplacementFieldTransform"
+               && endTransformFileType == "DisplacementFieldTransform")
+              {
+              typedef itk::DisplacementFieldTransform<double, 3>                  DisplacementFieldTransformType;
+              DisplacementFieldTransformType::Pointer oneToEndTransform =
+                static_cast<DisplacementFieldTransformType *>( oneToEndTransformGeneric.GetPointer() );
+              DisplacementFieldTransformType::Pointer endTransform =
+                static_cast<DisplacementFieldTransformType *>( endTransformGeneric.GetPointer() );
+              if ( oneToEndTransform->GetInverseDisplacementField()
+                  && endTransform->GetInverseDisplacementField() )
+                {
+                internalSyNSavedState->RemoveTransform();
+                internalSyNSavedState->AddTransform( oneToEndTransform->GetInverseTransform() );
+                internalSyNSavedState->AddTransform( endTransform );
+                internalSyNSavedState->AddTransform( endTransform->GetInverseTransform() );
+                }
               }
             std::cout << "Writing the registration state: " << this->m_SaveState << std::endl;
             typedef itk::TransformFileWriterTemplate<double>                TransformWriterType;

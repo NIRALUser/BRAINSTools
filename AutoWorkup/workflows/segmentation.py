@@ -17,14 +17,20 @@
 # config.set_log_dir(os.getcwd())
 #--config.set('logging', 'workflow_level', 'DEBUG')
 #--config.set('logging', 'interface_level', 'DEBUG')
-#--config.set('execution','remove_unnecessary_outputs','false')
+#--config.set('execution','remove_unnecessary_outputs','true')
 
+from __future__ import print_function
+from __future__ import absolute_import
+from builtins import str
 from nipype.utils.misc import package_check
 # package_check('nipype', '5.4', 'tutorial1') ## HACK: Check nipype version
 package_check('numpy', '1.3', 'tutorial1')
 package_check('scipy', '0.7', 'tutorial1')
 package_check('networkx', '1.0', 'tutorial1')
 package_check('IPython', '0.10', 'tutorial1')
+
+from utilities.misc import CommonANTsRegistrationSettings
+
 
 def segmentation(projectid, subjectid, sessionid, master_config, onlyT1=True, pipeline_name=''):
     import os.path
@@ -37,19 +43,19 @@ def segmentation(projectid, subjectid, sessionid, master_config, onlyT1=True, pi
     config.update_config(master_config)
 
     from PipeLineFunctionHelpers import ClipT1ImageWithBrainMask
-    from WorkupT1T2BRAINSCut import CreateBRAINSCutWorkflow
+    from .WorkupT1T2BRAINSCut import CreateBRAINSCutWorkflow
     from utilities.distributed import modify_qsub_args
-    from SEMTools import BRAINSSnapShotWriter
+    from nipype.interfaces.semtools import BRAINSSnapShotWriter
 
     #CLUSTER_QUEUE=master_config['queue']
     CLUSTER_QUEUE_LONG=master_config['long_q']
     baw200 = pe.Workflow(name=pipeline_name)
 
     # HACK: print for debugging
-    for key, itme in master_config.items():
-        print "-" * 30
-        print key, ":", itme
-    print "-" * 30
+    for key, itme in list(master_config.items()):
+        print("-" * 30)
+        print(key, ":", itme)
+    print("-" * 30)
     #END HACK
 
     inputsSpec = pe.Node(interface=IdentityInterface(fields=['t1_average',
@@ -103,38 +109,16 @@ def segmentation(projectid, subjectid, sessionid, master_config, onlyT1=True, pi
 
     A2SantsRegistrationPostABCSyN = pe.Node(interface=ants.Registration(), name=currentA2SantsRegistrationPostABCSyN)
 
-    many_cpu_ANTsSyN_options_dictionary = {'qsub_args': modify_qsub_args(CLUSTER_QUEUE_LONG,8,8,12), 'overwrite': True}
+    many_cpu_ANTsSyN_options_dictionary = {'qsub_args': modify_qsub_args(CLUSTER_QUEUE_LONG,8,8,16), 'overwrite': True}
     A2SantsRegistrationPostABCSyN.plugin_args = many_cpu_ANTsSyN_options_dictionary
-
-    A2SantsRegistrationPostABCSyN.inputs.num_threads   = -1
-    A2SantsRegistrationPostABCSyN.inputs.dimension = 3
-    A2SantsRegistrationPostABCSyN.inputs.transforms = ["SyN"]
-    A2SantsRegistrationPostABCSyN.inputs.transform_parameters = [[0.1, 3, 0]]
-    A2SantsRegistrationPostABCSyN.inputs.metric = ['CC']
-    A2SantsRegistrationPostABCSyN.inputs.sampling_strategy = [None]
-    A2SantsRegistrationPostABCSyN.inputs.sampling_percentage = [1.0]
-    A2SantsRegistrationPostABCSyN.inputs.metric_weight = [1.0]
-    A2SantsRegistrationPostABCSyN.inputs.radius_or_number_of_bins = [4]
-    A2SantsRegistrationPostABCSyN.inputs.number_of_iterations = [[70]]
-
-    A2SantsRegistrationPostABCSyN.inputs.convergence_threshold = [1e-6]
-
-    A2SantsRegistrationPostABCSyN.inputs.convergence_window_size = [12]
-    A2SantsRegistrationPostABCSyN.inputs.use_histogram_matching = [True]
-    A2SantsRegistrationPostABCSyN.inputs.shrink_factors = [[1]]
-    A2SantsRegistrationPostABCSyN.inputs.smoothing_sigmas = [[0]]
-    A2SantsRegistrationPostABCSyN.inputs.sigma_units = ["vox"]
-    A2SantsRegistrationPostABCSyN.inputs.use_estimate_learning_rate_once = [False]
-    A2SantsRegistrationPostABCSyN.inputs.write_composite_transform = True # Required for initialize_transforms_per_stage
-    A2SantsRegistrationPostABCSyN.inputs.collapse_output_transforms = False # Mutually Exclusive with initialize_transforms_per_stage
-    A2SantsRegistrationPostABCSyN.inputs.initialize_transforms_per_stage = True
-    A2SantsRegistrationPostABCSyN.inputs.save_state = 'SavedInternalSyNStatePostBABC.h5'
-    A2SantsRegistrationPostABCSyN.inputs.output_transform_prefix = 'AtlasToSubjectPostBABC_SyN'
-    A2SantsRegistrationPostABCSyN.inputs.winsorize_lower_quantile = 0.01
-    A2SantsRegistrationPostABCSyN.inputs.winsorize_upper_quantile = 0.99
-    A2SantsRegistrationPostABCSyN.inputs.output_warped_image = 'atlas2subjectPostBABC.nii.gz'
-    A2SantsRegistrationPostABCSyN.inputs.output_inverse_warped_image = 'subject2atlasPostBABC.nii.gz'
-    A2SantsRegistrationPostABCSyN.inputs.float = True
+    CommonANTsRegistrationSettings(
+                  antsRegistrationNode=A2SantsRegistrationPostABCSyN,
+                  registrationTypeDescription="A2SantsRegistrationPostABCSyN",
+                  output_transform_prefix='AtlasToSubjectPostBABC_SyN',
+                  output_warped_image='atlas2subjectPostBABC.nii.gz',
+                  output_inverse_warped_image='subject2atlasPostBABC.nii.gz',
+                  save_state='SavedInternalSyNStatePostBABC.h5',
+                  invert_initial_moving_transform=None)
 
     ## TODO: Try multi-modal registration here
     baw200.connect([(inputsSpec, A2SantsRegistrationPostABCSyN, [('atlasToSubjectRegistrationState', 'restore_state'),
@@ -264,6 +248,7 @@ def segmentation(projectid, subjectid, sessionid, master_config, onlyT1=True, pi
     # currentAntsLabelWarpToSubject = 'AntsLabelWarpToSubject' + str(subjectid) + "_" + str(sessionid)
     # AntsLabelWarpToSubject = pe.Node(interface=ants.ApplyTransforms(), name=currentAntsLabelWarpToSubject)
     #
+    # AntsLabelWarpToSubject.inputs.num_threads = -1
     # AntsLabelWarpToSubject.inputs.dimension = 3
     # AntsLabelWarpToSubject.inputs.output_image = 'warped_hncma_atlas_seg.nii.gz'
     # AntsLabelWarpToSubject.inputs.interpolation = "MultiLabel"
@@ -310,6 +295,7 @@ def segmentation(projectid, subjectid, sessionid, master_config, onlyT1=True, pi
     LinearSubjectToAtlasANTsApplyTransformsName = 'LinearSubjectToAtlasANTsApplyTransforms_' + str(sessionid)
     LinearSubjectToAtlasANTsApplyTransforms = pe.MapNode(interface=ants.ApplyTransforms(), iterfield=['input_image'],
                                                          name=LinearSubjectToAtlasANTsApplyTransformsName)
+    LinearSubjectToAtlasANTsApplyTransforms.inputs.num_threads = -1
     LinearSubjectToAtlasANTsApplyTransforms.inputs.interpolation = 'Linear'
 
     baw200.connect([(A2SantsRegistrationPostABCSyN, LinearSubjectToAtlasANTsApplyTransforms, [('inverse_composite_transform',
@@ -331,6 +317,7 @@ def segmentation(projectid, subjectid, sessionid, master_config, onlyT1=True, pi
     MultiLabelSubjectToAtlasANTsApplyTransformsName = 'MultiLabelSubjectToAtlasANTsApplyTransforms_' + str(sessionid) + '_map'
     MultiLabelSubjectToAtlasANTsApplyTransforms = pe.MapNode(interface=ants.ApplyTransforms(), iterfield=['input_image'],
                                                              name=MultiLabelSubjectToAtlasANTsApplyTransformsName)
+    MultiLabelSubjectToAtlasANTsApplyTransforms.inputs.num_threads = -1
     MultiLabelSubjectToAtlasANTsApplyTransforms.inputs.interpolation = 'MultiLabel'
 
     baw200.connect([(A2SantsRegistrationPostABCSyN, MultiLabelSubjectToAtlasANTsApplyTransforms,

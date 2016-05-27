@@ -119,7 +119,7 @@ def getPosteriorVolume(*args, **kwds):
     dirname = labels = project = subject = session = experimentDir = None
     experimentDir = _config.get('Results', 'directory')
     # parse keywords
-    for key, value in kwds.items():
+    for key, value in list(kwds.items()):
         if key == 'dirname':
             dirname = check_file(value)
         elif key == 'labels':
@@ -149,7 +149,7 @@ def getPosteriorVolume(*args, **kwds):
         if dirname is None:
             try:
                 dirname = check_file(os.path.join(experimentDir, project, subject, session))
-            except Exception, err:
+            except Exception as err:
                 raise err
     assert dirname is not None
     volume = 0.0

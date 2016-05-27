@@ -8,10 +8,12 @@ import nipype.pipeline.engine as pe  # pypeline engine
 
 import os
 
-from SEMTools.segmentation.specialized import BRAINSConstellationDetector
-from SEMTools.utilities.brains import BRAINSLandmarkInitializer
-from SEMTools.registration.brainsresample import BRAINSResample
-from SEMTools.segmentation.specialized import BRAINSROIAuto
+from nipype.interfaces.semtools.segmentation.specialized import BRAINSConstellationDetector
+from nipype.interfaces.semtools.utilities.brains import BRAINSLandmarkInitializer
+from nipype.interfaces.semtools.registration.brainsresample import BRAINSResample
+from nipype.interfaces.semtools.segmentation.specialized import BRAINSROIAuto
+
+from utilities.distributed import modify_qsub_args
 
 """
     from WorkupT1T2LandmarkInitialization import CreateLandmarkInitializeWorkflow
@@ -23,12 +25,14 @@ from SEMTools.segmentation.specialized import BRAINSROIAuto
     landmarkInitializeWF.connect( BAtlas, 'LLSModel_50Lmks_h5', myLocalLMIWF, 'inputspec.LLSModel')
     landmarkInitializeWF.connect( BAtlas, 'T1_50Lmks_mdl', myLocalLMIWF, 'inputspec.inputTemplateModel')
 
-    landmarkInitializeWF.connect(BAtlas,'template_t1',myLocalLMIWF,'inputsSpec.atlasVolume')
+    landmarkInitializeWF.connect(BAtlas,'template_t1_denoised_gaussian',myLocalLMIWF,'inputsSpec.atlasVolume')
 
 """
 
 
-def CreateLandmarkInitializeWorkflow(WFname, InterpolationMode, DoReverseInit=False, debug=False):
+def CreateLandmarkInitializeWorkflow(WFname, master_config, InterpolationMode, PostACPCAlignToAtlas, DoReverseInit, useEMSP=False, Debug=False):
+    CLUSTER_QUEUE=master_config['queue']
+    CLUSTER_QUEUE_LONG=master_config['long_q']
     landmarkInitializeWF = pe.Workflow(name=WFname)
 
     #############
@@ -37,7 +41,8 @@ def CreateLandmarkInitializeWorkflow(WFname, InterpolationMode, DoReverseInit=Fa
                                                              'atlasWeightFilename',
                                                              'LLSModel',
                                                              'inputTemplateModel',
-                                                             'atlasVolume']),
+                                                             'atlasVolume',
+                                                             'EMSP']),
                          run_without_submitting=True,
                          name='inputspec')
 
@@ -55,6 +60,8 @@ def CreateLandmarkInitializeWorkflow(WFname, InterpolationMode, DoReverseInit=Fa
     # Run ACPC Detect on first T1 Image - Base Image
     ########################################################
     BCD = pe.Node(interface=BRAINSConstellationDetector(), name="BCD")
+    many_cpu_BCD_options_dictionary = {'qsub_args': modify_qsub_args(CLUSTER_QUEUE_LONG,4,2,4), 'overwrite': True}
+    BCD.plugin_args = many_cpu_BCD_options_dictionary
     ##  Use program default BCD.inputs.inputTemplateModel = T1ACPCModelFile
     # BCD.inputs.outputVolume =   "BCD_OUT" + "_ACPC_InPlace.nii.gz"                #$# T1AcpcImageList
     BCD.inputs.outputTransform = "BCD" + "_Original2ACPC_transform.h5"
@@ -75,8 +82,16 @@ def CreateLandmarkInitializeWorkflow(WFname, InterpolationMode, DoReverseInit=Fa
     landmarkInitializeWF.connect(inputsSpec, 'LLSModel',             BCD, 'LLSModel')
     landmarkInitializeWF.connect(inputsSpec, 'inputTemplateModel',   BCD, 'inputTemplateModel')
 
+    # If EMSP, pre-selected landmarks are given, force to use.
+    if useEMSP:
+        print("*** Use pre-selected landmark file for Landmark Detection")
+        landmarkInitializeWF.connect(inputsSpec, 'EMSP', BCD, 'inputLandmarksEMSP')
 
-    landmarkInitializeWF.connect(inputsSpec, 'atlasVolume',          BCD, 'atlasVolume')
+
+    # If the atlas volume is from this subject (i.e. after template building for the longitudinal phase) then set this to True
+    # Otherwise, it is probably best to let the ACPC alignment be fully defined by the landmark points themselves.
+    if PostACPCAlignToAtlas:
+        landmarkInitializeWF.connect(inputsSpec, 'atlasVolume',          BCD, 'atlasVolume')
 
     ########################################################
     # Run BLI atlas_to_subject
@@ -106,9 +121,8 @@ def CreateLandmarkInitializeWorkflow(WFname, InterpolationMode, DoReverseInit=Fa
 
         landmarkInitializeWF.connect(inputsSpec, 'inputVolume', Resample2Atlas, 'inputVolume')
         landmarkInitializeWF.connect(BLI2Atlas, 'outputTransformFilename', Resample2Atlas, 'warpTransform')
-        landmarkInitializeWF.connect(inputsSpec, 'atlasVolume', Resample2Atlas, 'referenceVolume')
 
-    if (DoReverseInit == True) and (debug == True):
+    if (DoReverseInit == True) and (Debug == True):
         ResampleFromAtlas = pe.Node(interface=BRAINSResample(), name="ResampleFromAtlas")
         ResampleFromAtlas.inputs.interpolationMode = "Linear"
         ResampleFromAtlas.inputs.outputVolume = "atlas2subject.nii.gz"
@@ -118,6 +132,8 @@ def CreateLandmarkInitializeWorkflow(WFname, InterpolationMode, DoReverseInit=Fa
         landmarkInitializeWF.connect(BCD, 'outputResampledVolume', ResampleFromAtlas, 'referenceVolume')
 
     BROIAUTO = pe.Node(interface=BRAINSROIAuto(), name="BROIAuto_cropped")
+    many_cpu_BROIAUTO_options_dictionary = {'qsub_args': modify_qsub_args(CLUSTER_QUEUE_LONG,4,2,4), 'overwrite': True}
+    BROIAUTO.plugin_args = many_cpu_BROIAUTO_options_dictionary
     BROIAUTO.inputs.outputVolume = "Cropped_BCD_ACPC_Aligned.nii.gz"
     BROIAUTO.inputs.ROIAutoDilateSize = 10
     BROIAUTO.inputs.cropOutput = True

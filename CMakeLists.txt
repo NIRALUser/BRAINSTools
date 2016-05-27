@@ -1,4 +1,9 @@
-cmake_minimum_required(VERSION 2.8.9)
+if(DEFINED CMAKE_CXX_STANDARD AND (NOT ${CMAKE_CXX_STANDARD} EQUAL "98" ))
+  cmake_minimum_required(VERSION 3.2.0) ## 3.2.0 needed for AppleClang CXX11 finding
+else()
+  cmake_minimum_required(VERSION 2.8.9) ## Needed for slicer compliance
+endif()
+
 if(POLICY CMP0048)
   cmake_policy(SET CMP0048 OLD) #OLD project() behavior for setting VERSION variable
 endif()
@@ -8,11 +13,28 @@ endif()
 foreach(p
   CMP0054 # CMake 3.1 Only interpret ``if()`` arguments as variables or keywords when unquoted.
   CMP0042 # ``MACOSX_RPATH`` is enabled by default.
+  CMP0025 # AppleClang vs. regular Clang
+  CMP0063 # Honor visibility properties for all target types
   )
   if(POLICY ${p})
     cmake_policy(SET ${p} NEW)
   endif()
 endforeach()
+
+#-----------------------------------------------------------------------------
+set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/CMake" ${CMAKE_MODULE_PATH})
+include(ExternalProject)
+include(ExternalProjectDependency)
+#-----------------------------------------------------------------------------
+if(APPLE)
+  # Note: By setting CMAKE_OSX_* variables before any enable_language() or project() calls,
+  #       we ensure that the bitness, and C++ standard library will be properly detected.
+  include(BlockSetCMakeOSXVariables)
+  mark_as_superbuild(
+    VARS CMAKE_OSX_ARCHITECTURES:STRING CMAKE_OSX_SYSROOT:PATH CMAKE_OSX_DEPLOYMENT_TARGET:STRING
+    ALL_PROJECTS
+    )
+endif()
 
 set(LOCAL_PROJECT_NAME BRAINSTools)
 set(PRIMARY_PROJECT_NAME ${LOCAL_PROJECT_NAME})
@@ -40,6 +62,15 @@ if(${LOCAL_PROJECT_NAME}_SUPERBUILD)
   project(SuperBuild_${LOCAL_PROJECT_NAME} C CXX)
 else()
   project(${LOCAL_PROJECT_NAME} C CXX)
+endif()
+
+#if(DEFINED CMAKE_CONFIGURATION_TYPES)
+#  set(CMAKE_CONFIGURATION_TYPES "Release;Debug" CACHE STRING "" FORCE) # setting only two configuration types
+#endif()
+
+## For compatibility with Slicer
+if(NOT CMAKE_CXX_STANDARD)
+   set(CMAKE_CXX_STANDARD 98) # Supported values are ``98``, ``11`` and ``14``.
 endif()
 
 enable_language(C)

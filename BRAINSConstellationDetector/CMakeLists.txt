@@ -9,29 +9,60 @@
 # ITK
 #
 FindITKUtil(BRAINSConstellationDetector_ITK
-  ITKThresholding
-  ITKImageCompare
-  ITKRegistrationCommon
-  ITKSmoothing
-  ITKConnectedComponents
-  ITKMathematicalMorphology
   ITKBinaryMathematicalMorphology
-  ITKDistanceMap
-  ITKRegionGrowing
-  ITKImageCompare
-  ITKOptimizersv4
-  ITKRegistrationMethodsv4
-  ITKVTK
-  ITKVtkGlue
-  ITKTestKernel
+  ITKCommon
+  ITKConnectedComponents
   ITKConvolution
+  ITKDistanceMap
+  ITKHDF5
+  ITKIOImageBase
+  ITKIOTransformBase
+  ITKImageCompare
+  ITKImageFilterBase
+  ITKImageFunction
+  ITKImageGrid
+  ITKImageIntensity
+  ITKImageStatistics
+  ITKLabelMap
+  ITKMathematicalMorphology
+  ITKOptimizersv4
+  ITKRegionGrowing
+  ITKRegistrationCommon
+  ITKRegistrationMethodsv4
+  ITKSmoothing
+  ITKSpatialObjects
+  ITKStatistics
+  ITKTestKernel
+  ITKThresholding
+  ITKTransform
 )
 
+# Build GUI option, the option is provided in src directory
 if(BUILD_WITH_GUI OR BRAINS3_USE_QT OR BRAINSTools_USE_QT)
+  FindITKUtil(
+    ITKVTK
+    ITKVtkGlue
+  )
   set(LOCAL_VTKQT vtkGUISupportQt)
+
+FindVTKUtil(
+  vtkCommonColor
+  vtkCommonComputationalGeometry
+  vtkCommonCore
+  vtkCommonDataModel
+  vtkCommonExecutionModel
+  vtkCommonMath
+  vtkCommonMisc
+  vtkCommonSystem
+  vtkCommonTransforms
+  vtkFiltersCore
+  vtkFiltersGeneral
+  vtkFiltersSources
+  vtkImagingCore
+  vtkInteractionStyle
+  vtkRenderingCore
+  ${LOCAL_VTKQT})
 endif()
-FindVTKUtil(vtkRenderingFreeType vtkRenderingOpenGL vtkInteractionStyle
-    vtkRenderingCore  vtkImagingSources ${LOCAL_VTKQT})
 
 #-----------------------------------------------------------------------------
 # Output directories.
@@ -48,7 +79,7 @@ if(BUILD_WITH_GUI OR BRAINS3_USE_QT OR BRAINSTools_USE_QT)
 endif()
 
 # Build test option
-if(BUILD_TESTING AND NOT Slicer_BUILD_BRAINSTOOLS)
+if(BUILD_TESTING AND NOT BRAINSTools_DISABLE_TESTING)
   add_subdirectory(TestSuite)
 endif()
 

@@ -64,14 +64,13 @@ int main( int argc, char * argv[] )
   std::cout << "Computing the average file for " << k << " input landmark files..." << std::endl;
 
   unsigned int numNamedLandmarks = 0;
-  double       x_ave, y_ave, z_ave;
 
-  std::map<std::string, PointType> LandmarksAverageMap;
+  std::map<std::string, LandmarkPointType> LandmarksAverageMap;
 
-  typedef std::vector<std::map<std::string, PointType> > LandmarksMapTypeVec;
+  typedef std::vector<std::map<std::string, LandmarkPointType> > LandmarksMapTypeVec;
   LandmarksMapTypeVec LandmarksMapVector;
 
-  // LandmarksMapType is as "std::map<std::string, PointType>" which means a map between landmarks and their
+  // LandmarksMapType is as "std::map<std::string, LandmarkPointType>" which means a map between landmarks and their
   // coordinates.
   // For each input landmark file this LandmarksMapType is computed and is set in a vector: "LandmarksMapTypeVec"
 
@@ -95,7 +94,9 @@ int main( int argc, char * argv[] )
   // Computing the average coordinate for each landmark
   for( unsigned int j = 0; j < numNamedLandmarks; j++ )
     {
-    x_ave = y_ave = z_ave = 0;
+    double x_ave = 0.0;
+    double y_ave = 0.0;
+    double z_ave = 0.0;
     std::string name = LandmarksNames[j];
     for( unsigned int i = 0; i < k; i++ )
       {
@@ -103,9 +104,9 @@ int main( int argc, char * argv[] )
       y_ave += LandmarksMapVector[i][name][1];
       z_ave += LandmarksMapVector[i][name][2];
       }
-    x_ave = x_ave / k;
-    y_ave = y_ave / k;
-    z_ave = z_ave / k;
+    x_ave = x_ave / static_cast<double>(k);
+    y_ave = y_ave / static_cast<double>(k);
+    z_ave = z_ave / static_cast<double>(k);
 
     LandmarksAverageMap[name][0] = x_ave;
     LandmarksAverageMap[name][1] = y_ave;

@@ -287,7 +287,7 @@ BRAINSHoughEyeDetector<TInputImage, TOutputImage>
       {
       this->m_Ipd += vnl_math_sqr( this->m_LE[i] - this->m_RE[i] );
       }
-    this->m_Ipd = vcl_sqrt( this->m_Ipd );
+    this->m_Ipd = std::sqrt( this->m_Ipd );
     std::cout << "The resulted interpupilary distance is " << this->m_Ipd << " mm" << std::endl;
 
     if( this->m_Ipd < 40 or this->m_Ipd > 85 )
@@ -346,10 +346,10 @@ BRAINSHoughEyeDetector<TInputImage, TOutputImage>
     this->m_RotAngle[0] = 0;
 
     // about +P-axis
-    this->m_RotAngle[1] = vcl_atan( ( this->m_LE[2] - this->m_RE[2] )
+    this->m_RotAngle[1] = std::atan( ( this->m_LE[2] - this->m_RE[2] )
                                     / ( this->m_LE[0] - this->m_RE[0] ) );
     // about +S-axis
-    this->m_RotAngle[2] = -vcl_atan( ( this->m_LE[1] - this->m_RE[1] )
+    this->m_RotAngle[2] = -std::atan( ( this->m_LE[1] - this->m_RE[1] )
                                      / ( this->m_LE[0] - this->m_RE[0] ) );
 
     // Set affine tranformation
@@ -367,29 +367,14 @@ BRAINSHoughEyeDetector<TInputImage, TOutputImage>
     /** The output image will have exact the same index contents
      but with modified image info so that the index-to-physical mapping
      makes the image in the physical space aligned */
-    this->m_OutputImage->CopyInformation( image );
-    this->m_OutputImage->SetRegions( region );
+    typedef itk::ResampleInPlaceImageFilter<TInputImage, TOutputImage> ResampleIPFilterType;
 
-    this->m_OutputImage->SetOrigin( this->m_InvVersorTransform->GetMatrix()
-                                    * image->GetOrigin() + this->m_InvVersorTransform->GetOffset() );
+    typename ResampleIPFilterType::Pointer resampleIPFilter = ResampleIPFilterType::New();
+    resampleIPFilter->SetInputImage( image );
+    resampleIPFilter->SetRigidTransform( this->m_VersorTransform.GetPointer() );
+    resampleIPFilter->Update();
+    this->m_OutputImage = resampleIPFilter->GetOutput();
 
-    this->m_OutputImage->SetDirection( this->m_InvVersorTransform->GetMatrix()
-                                       * image->GetDirection() );
-
-    this->m_OutputImage->Allocate();
-
-      {
-      InputImageConstIterator It0( image, region );
-      It0.GoToBegin();
-      OutputImageIterator It1( this->m_OutputImage, region );
-      It1.GoToBegin();
-      while( !It0.IsAtEnd()  && !It1.IsAtEnd() )
-        {
-        It1.Set( It0.Get() );
-        ++It0;
-        ++It1;
-        }
-      }
     this->GraftOutput( this->m_OutputImage );
     }
 }

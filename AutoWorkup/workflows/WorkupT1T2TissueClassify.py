@@ -1,5 +1,7 @@
 #!/usr/bin/env python
 
+from __future__ import print_function
+from builtins import zip
 from nipype.interfaces.base import CommandLine, CommandLineInputSpec, TraitedSpec, File, Directory
 from nipype.interfaces.base import traits, isdefined, BaseInterface
 from nipype.interfaces.utility import Merge, Split, Function, Rename, IdentityInterface
@@ -35,10 +37,10 @@ def getListIndexOrNoneIfOutOfRange(imageList, index):
 def MakePosteriorDictionaryFunc(posteriorImages):
     from PipeLineFunctionHelpers import POSTERIORS
     if len(POSTERIORS) != len(posteriorImages):
-        print "ERROR: ", posteriorNames
-        print "ERROR: ", POSTERIORS
+        print("ERROR: ", posteriorNames)
+        print("ERROR: ", POSTERIORS)
         return -1
-    temp_dictionary = dict(zip(POSTERIORS, posteriorImages))
+    temp_dictionary = dict(list(zip(POSTERIORS, posteriorImages)))
     return temp_dictionary
 
 
@@ -50,8 +52,8 @@ def CreateTissueClassifyWorkflow(WFname, master_config, InterpolationMode,UseReg
 
     tissueClassifyWF = pe.Workflow(name=WFname)
 
-    inputsSpec = pe.Node(interface=IdentityInterface(fields=['T1List', 'T2List', 'PDList', 'FLList',
-                                                             'OtherList', 'T1_count', 'PrimaryT1',
+    inputsSpec = pe.Node(interface=IdentityInterface(fields=['T1List', 'T2List', 'PDList', 'FLList', 'OTHERList',
+                                                             'T1_count', 'PrimaryT1',
                                                              'atlasDefinition',
                                                              'atlasToSubjectInitialTransform','atlasVolume'
                                                             ]),
@@ -77,53 +79,38 @@ def CreateTissueClassifyWorkflow(WFname, master_config, InterpolationMode,UseReg
     # Run BABCext on Multi-modal images
     ########################################################
     makeOutImageList = pe.Node(Function(function=MakeOutFileList,
-                                        input_names=['T1List', 'T2List', 'PDList', 'FLList',
-                                                     'OtherList','postfix','PrimaryT1'],
-                                        output_names=['inImageList','outImageList','imageTypeList']),
+                                                  input_names=['T1List', 'T2List', 'PDList', 'FLList',
+                                                     'OTHERList','postfix', 'postfixBFC','postfixUnwrapped','PrimaryT1','ListOutType'],
+                                                  output_names=['inImageList', 'outImageList', 'outBFCImageList',
+                                                                'outUnwrappedImageList','imageTypeList']),
                                         run_without_submitting=True, name="99_makeOutImageList")
     tissueClassifyWF.connect(inputsSpec, 'T1List', makeOutImageList, 'T1List')
     tissueClassifyWF.connect(inputsSpec, 'T2List', makeOutImageList, 'T2List')
     tissueClassifyWF.connect(inputsSpec, 'PDList', makeOutImageList, 'PDList')
+    tissueClassifyWF.connect(inputsSpec, 'FLList', makeOutImageList, 'FLList' )
+    tissueClassifyWF.connect(inputsSpec, 'OTHERList', makeOutImageList, 'OTHERList')
     tissueClassifyWF.connect(inputsSpec, 'PrimaryT1', makeOutImageList, 'PrimaryT1')
-    makeOutImageList.inputs.FLList = []  # an emptyList HACK
+    makeOutImageList.inputs.ListOutType= False
     makeOutImageList.inputs.postfix = "_corrected.nii.gz"
-    # HACK tissueClassifyWF.connect( inputsSpec, 'FLList', makeOutImageList, 'FLList' )
-    tissueClassifyWF.connect(inputsSpec, 'OtherList', makeOutImageList, 'OtherList')
+    makeOutImageList.inputs.postfixBFC = "_NOT_USED"
+    makeOutImageList.inputs.postfixUnwrapped = "_NOT_USED"
 
     ##### Initialize with ANTS Transform For AffineComponentBABC
-    currentAtlasToSubjectantsRigidRegistration = 'AtlasToSubjectANTsPreABC_Rigid'
+    currentAtlasToSubjectantsRigidRegistration = 'AtlasToSubjectANTsPreABC_Affine'
     A2SantsRegistrationPreABCRigid = pe.Node(interface=ants.Registration(), name=currentAtlasToSubjectantsRigidRegistration)
     many_cpu_ANTsRigid_options_dictionary = {'qsub_args': modify_qsub_args(CLUSTER_QUEUE,4,2,8), 'overwrite': True}
     A2SantsRegistrationPreABCRigid.plugin_args = many_cpu_ANTsRigid_options_dictionary
 
-    A2SantsRegistrationPreABCRigid.inputs.num_threads   = -1
-    A2SantsRegistrationPreABCRigid.inputs.dimension = 3
-    A2SantsRegistrationPreABCRigid.inputs.transforms = ["Affine",]
-    A2SantsRegistrationPreABCRigid.inputs.transform_parameters = [[0.1]]
-    A2SantsRegistrationPreABCRigid.inputs.metric = ['MI']
-    A2SantsRegistrationPreABCRigid.inputs.sampling_strategy = ['Regular']
-    A2SantsRegistrationPreABCRigid.inputs.sampling_percentage = [0.5]
-    A2SantsRegistrationPreABCRigid.inputs.metric_weight = [1.0]
-    A2SantsRegistrationPreABCRigid.inputs.radius_or_number_of_bins = [32]
-    A2SantsRegistrationPreABCRigid.inputs.number_of_iterations = [[1000,1000, 500, 100]]
+    CommonANTsRegistrationSettings(
+                      antsRegistrationNode=A2SantsRegistrationPreABCRigid,
+                      registrationTypeDescription='AtlasToSubjectANTsPreABC_Affine',
+                      output_transform_prefix='AtlasToSubjectPreBABC_Rigid',
+                      output_warped_image='atlas2subjectRigid.nii.gz',
+                      output_inverse_warped_image = 'subject2atlasRigid.nii.gz',
+                      save_state=None,
+                      invert_initial_moving_transform = False
+                      )
 
-    A2SantsRegistrationPreABCRigid.inputs.convergence_threshold = [1e-8]
-
-    A2SantsRegistrationPreABCRigid.inputs.convergence_window_size = [10]
-    A2SantsRegistrationPreABCRigid.inputs.use_histogram_matching = [True]
-    A2SantsRegistrationPreABCRigid.inputs.shrink_factors = [[8, 4, 2, 1]]
-    A2SantsRegistrationPreABCRigid.inputs.smoothing_sigmas = [[3, 2, 1, 0]]
-    A2SantsRegistrationPreABCRigid.inputs.sigma_units = ["vox"]
-    A2SantsRegistrationPreABCRigid.inputs.use_estimate_learning_rate_once = [False]
-    A2SantsRegistrationPreABCRigid.inputs.write_composite_transform = True  # Required for initialize_transforms_per_stage
-    A2SantsRegistrationPreABCRigid.inputs.collapse_output_transforms = False # Mutually Exclusive with initialize_transforms_per_stage
-    A2SantsRegistrationPreABCRigid.inputs.initialize_transforms_per_stage = True
-    A2SantsRegistrationPreABCRigid.inputs.output_transform_prefix = 'AtlasToSubjectPreBABC_Rigid'
-    A2SantsRegistrationPreABCRigid.inputs.winsorize_lower_quantile = 0.01
-    A2SantsRegistrationPreABCRigid.inputs.winsorize_upper_quantile = 0.99
-    A2SantsRegistrationPreABCRigid.inputs.output_warped_image = 'atlas2subjectRigid.nii.gz'
-    A2SantsRegistrationPreABCRigid.inputs.output_inverse_warped_image = 'subject2atlasRigid.nii.gz'
-    A2SantsRegistrationPreABCRigid.inputs.float = True
 
     tissueClassifyWF.connect(inputsSpec, 'atlasToSubjectInitialTransform',A2SantsRegistrationPreABCRigid,'initial_moving_transform')
     tissueClassifyWF.connect(inputsSpec, 'PrimaryT1',A2SantsRegistrationPreABCRigid,'fixed_image')
@@ -133,42 +120,21 @@ def CreateTissueClassifyWorkflow(WFname, master_config, InterpolationMode,UseReg
     ##### Initialize with ANTS Transform For SyN component BABC
     currentAtlasToSubjectantsRegistration = 'AtlasToSubjectANTsPreABC_SyN'
     A2SantsRegistrationPreABCSyN = pe.Node(interface=ants.Registration(), name=currentAtlasToSubjectantsRegistration)
-    many_cpu_ANTsSyN_options_dictionary = {'qsub_args': modify_qsub_args(CLUSTER_QUEUE_LONG,8,8,12), 'overwrite': True}
+    many_cpu_ANTsSyN_options_dictionary = {'qsub_args': modify_qsub_args(CLUSTER_QUEUE_LONG,8,8,16), 'overwrite': True}
     A2SantsRegistrationPreABCSyN.plugin_args = many_cpu_ANTsSyN_options_dictionary
-
-    A2SantsRegistrationPreABCSyN.inputs.num_threads   = -1
-    A2SantsRegistrationPreABCSyN.inputs.dimension = 3
-    A2SantsRegistrationPreABCSyN.inputs.transforms = ["SyN","SyN"]
-    A2SantsRegistrationPreABCSyN.inputs.transform_parameters = [[0.1, 3, 0],[0.1, 3, 0]]
-    A2SantsRegistrationPreABCSyN.inputs.metric = ['CC','CC']
-    A2SantsRegistrationPreABCSyN.inputs.sampling_strategy = [None,None]
-    A2SantsRegistrationPreABCSyN.inputs.sampling_percentage = [1.0,1.0]
-    A2SantsRegistrationPreABCSyN.inputs.metric_weight = [1.0,1.0]
-    A2SantsRegistrationPreABCSyN.inputs.radius_or_number_of_bins = [4,4]
-    A2SantsRegistrationPreABCSyN.inputs.number_of_iterations = [[500, 500], [500, 70]]
-
-    A2SantsRegistrationPreABCSyN.inputs.convergence_threshold = [1e-8,1e-6]
-
-    A2SantsRegistrationPreABCSyN.inputs.convergence_window_size = [12]
-    A2SantsRegistrationPreABCSyN.inputs.use_histogram_matching = [True,True]
-    A2SantsRegistrationPreABCSyN.inputs.shrink_factors = [[8, 4], [2, 1]]
-    A2SantsRegistrationPreABCSyN.inputs.smoothing_sigmas = [[3, 2], [1, 0]]
-    A2SantsRegistrationPreABCSyN.inputs.sigma_units = ["vox","vox"]
-    A2SantsRegistrationPreABCSyN.inputs.use_estimate_learning_rate_once = [False,False]
-    A2SantsRegistrationPreABCSyN.inputs.write_composite_transform = True # Required for initialize_transforms_per_stage
-    A2SantsRegistrationPreABCSyN.inputs.collapse_output_transforms = False # Mutually Exclusive with initialize_transforms_per_stage
-    A2SantsRegistrationPreABCSyN.inputs.initialize_transforms_per_stage = True
-    A2SantsRegistrationPreABCSyN.inputs.save_state = 'SavedInternalSyNState.h5'
-    A2SantsRegistrationPreABCSyN.inputs.output_transform_prefix = 'AtlasToSubjectPreBABC_SyN'
-    A2SantsRegistrationPreABCSyN.inputs.winsorize_lower_quantile = 0.01
-    A2SantsRegistrationPreABCSyN.inputs.winsorize_upper_quantile = 0.99
-    A2SantsRegistrationPreABCSyN.inputs.output_warped_image = 'atlas2subject.nii.gz'
-    A2SantsRegistrationPreABCSyN.inputs.output_inverse_warped_image = 'subject2atlas.nii.gz'
-    A2SantsRegistrationPreABCSyN.inputs.float = True
+    CommonANTsRegistrationSettings(
+                      antsRegistrationNode=A2SantsRegistrationPreABCSyN,
+                      registrationTypeDescription='AtlasToSubjectANTsPreABC_SyN',
+                      output_transform_prefix='AtlasToSubjectPreBABC_SyN',
+                      output_warped_image='atlas2subject.nii.gz',
+                      output_inverse_warped_image = 'subject2atlas.nii.gz',
+                      save_state='SavedInternalSyNState.h5',
+                      invert_initial_moving_transform = False
+                      )
 
     ## if using Registration masking, then do ROIAuto on fixed and moving images and connect to registraitons
     if UseRegistrationMasking == True:
-        from SEMTools.segmentation.specialized import BRAINSROIAuto
+        from nipype.interfaces.semtools.segmentation.specialized import BRAINSROIAuto
 
         fixedROIAuto = pe.Node(interface=BRAINSROIAuto(), name="fixedImageROIAUTOMask")
         fixedROIAuto.inputs.ROIAutoDilateSize=10
@@ -187,26 +153,27 @@ def CreateTissueClassifyWorkflow(WFname, master_config, InterpolationMode,UseReg
         tissueClassifyWF.connect(fixedROIAuto, 'outputROIMaskVolume',A2SantsRegistrationPreABCSyN,'fixed_image_mask')
         tissueClassifyWF.connect(movingROIAuto, 'outputROIMaskVolume',A2SantsRegistrationPreABCSyN,'moving_image_mask')
 
-    tissueClassifyWF.connect(A2SantsRegistrationPreABCRigid,
-                             ('composite_transform', getListIndexOrNoneIfOutOfRange, 0 ),
+    tissueClassifyWF.connect(A2SantsRegistrationPreABCRigid, 'composite_transform',
                              A2SantsRegistrationPreABCSyN,'initial_moving_transform')
     tissueClassifyWF.connect(inputsSpec, 'PrimaryT1',A2SantsRegistrationPreABCSyN,'fixed_image')
     tissueClassifyWF.connect(inputsSpec, 'atlasVolume',A2SantsRegistrationPreABCSyN,'moving_image')
 
     BABCext = pe.Node(interface=BRAINSABCext(), name="BABC")
-    many_cpu_BABC_options_dictionary = {'qsub_args': modify_qsub_args(CLUSTER_QUEUE,8,2,4), 'overwrite': True}
+    many_cpu_BABC_options_dictionary = {'qsub_args': modify_qsub_args(CLUSTER_QUEUE,13,8,16), 'overwrite': True}
     BABCext.plugin_args = many_cpu_BABC_options_dictionary
     tissueClassifyWF.connect(makeOutImageList, 'inImageList', BABCext, 'inputVolumes')
     tissueClassifyWF.connect(makeOutImageList, 'imageTypeList', BABCext, 'inputVolumeTypes')
     tissueClassifyWF.connect(makeOutImageList, 'outImageList', BABCext, 'outputVolumes')
     BABCext.inputs.debuglevel = 0
     BABCext.inputs.useKNN = True
+    BABCext.inputs.purePlugsThreshold = 0.1  #New feature to allow for pure plug processing and improvements.
     BABCext.inputs.maxIterations = 3
     BABCext.inputs.maxBiasDegree = 4
     BABCext.inputs.filterIteration = 3
-    BABCext.inputs.filterMethod = 'GradientAnisotropicDiffusion'
+    #BABCext.inputs.filterMethod = 'GradientAnisotropicDiffusion' ## If inputs are denoised, we don't need this
+    BABCext.inputs.filterMethod = 'None'
     BABCext.inputs.atlasToSubjectTransformType = 'SyN'
-    BABCext.inputs.gridSize = [10, 10, 10]
+    # Using SyN, so no bsplines here BABCext.inputs.gridSize = [10, 10, 10]
     BABCext.inputs.outputFormat = "NIFTI"
     BABCext.inputs.outputLabels = "brain_label_seg.nii.gz"
     BABCext.inputs.outputDirtyLabels = "volume_label_seg.nii.gz"
@@ -220,7 +187,7 @@ def CreateTissueClassifyWorkflow(WFname, master_config, InterpolationMode,UseReg
     tissueClassifyWF.connect(inputsSpec, 'atlasDefinition', BABCext, 'atlasDefinition')
     # NOTE: MUTUALLY EXCLUSIVE with restoreState
     #tissueClassifyWF.connect(A2SantsRegistrationPreABCSyN,
-    #                         ( 'composite_transform', getListIndexOrNoneIfOutOfRange, 0 ),
+    #                         'composite_transform',
     #                         BABCext, 'atlasToSubjectInitialTransform')
     tissueClassifyWF.connect(A2SantsRegistrationPreABCSyN,'save_state',
                              BABCext, 'restoreState')

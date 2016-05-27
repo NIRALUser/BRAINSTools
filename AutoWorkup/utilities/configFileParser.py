@@ -18,13 +18,21 @@ Options:
   -v, --version  Print file version and exit
   --debug        Run doctests for file  # TODO
 """
-from ConfigParser import ConfigParser
+from __future__ import print_function
+from __future__ import absolute_import
+from __future__ import division
+from future import standard_library
+standard_library.install_aliases()
+from past.utils import old_div
+from builtins import object
+from configparser import ConfigParser
 import os
 import sys
+import copy
 
-from pathHandling import *
-from distributed import modify_qsub_args
-import misc
+from .pathHandling import *
+from .distributed import modify_qsub_args
+from . import misc
 
 
 def parseEnvironment(parser, environment):
@@ -37,12 +45,12 @@ def parseEnvironment(parser, environment):
         retval['env'] = eval(parser.get(environment, 'ENVAR_DICT'))
     else:
         retval['env'] = dict()
-    if 'PYTHONPATH' in retval['env'].keys():
+    if 'PYTHONPATH' in list(retval['env'].keys()):
         pythonpath = appendPathList(parser.get(environment, 'APPEND_PYTHONPATH'), retval['env']['PYTHONPATH'])
         retval['env']['PYTHONPATH'] = pythonpath  # Create append to PYTHONPATH
     else:
         retval['env']['PYTHONPATH'] = parser.get(environment, 'APPEND_PYTHONPATH')
-    if 'PATH' in retval['env'].keys():
+    if 'PATH' in list(retval['env'].keys()):
         envpath = appendPathList(parser.get(environment, 'APPEND_PATH'), retval['env']['PATH'])
         retval['env']['PATH'] = envpath  # Create append to PATH
     else:
@@ -73,8 +81,8 @@ def create_experiment_dir(dirname, name, suffix, verify=False):
         return validatePath(fullpath, False, True)
     else:
         if os.path.isdir(fullpath):
-            print "WARNING: Experiment directory already exists.  Continuing will overwrite the previous results..."
-            print "   Path: {0}".format(fullpath)
+            print("WARNING: Experiment directory already exists.  Continuing will overwrite the previous results...")
+            print("   Path: {0}".format(fullpath))
             return fullpath
         try:
             os.makedirs(fullpath)
@@ -98,37 +106,60 @@ def parseExperiment(parser, workflow_phase):
     else:
         assert 0 == 1, "ERROR INVALID workflow_phase"
     current = parser.get('EXPERIMENT', 'EXPERIMENT' + current_suffix)
+
+    """ output directory """
     retval['cachedir'] = create_experiment_dir(dirname, current, 'CACHE')
     retval['resultdir'] = create_experiment_dir(dirname, current, 'Results')
+
+    """ any previous run HACK: DO WE EVER USE THIS?"""
     if parser.has_option('EXPERIMENT', 'EXPERIMENT' + current_suffix + '_INPUT'):
         # If this is the initial run, there will be no previous experiment
         previous = parser.get('EXPERIMENT', 'EXPERIMENT' + current_suffix + '_INPUT')
         retval['previousresult'] = create_experiment_dir(dirname, previous, 'Results', verify=True)
-    atlas = validatePath(parser.get('EXPERIMENT', 'ATLAS_PATH'), False, True)
-    useRegistrationMasking = False
 
+    useRegistrationMasking = False
     try:
         regMasking = parser.get('EXPERIMENT', 'USE_REGISTRATION_MASKING')
         if regMasking == "True":
             useRegistrationMasking = True
-
     except:
         pass
     retval['use_registration_masking'] = useRegistrationMasking
+
+    atlas = validatePath(parser.get('EXPERIMENT', 'ATLAS_PATH'), False, True)
     retval['atlascache'] = clone_atlas_dir(retval['cachedir'], atlas)
+
     if workflow_phase == 'cross-validation':
         retval['components'] = ['']
     else:
         retval['dbfile'] = validatePath(parser.get('EXPERIMENT', 'SESSION_DB' + current_suffix), False, False)
         retval['components'] = [x.lower() for x in eval(parser.get('EXPERIMENT', 'WORKFLOW_COMPONENTS' + current_suffix))]
+        if 'jointfusion_2015_wholebrain' in retval['components']:
+            print("'jointFusion_2015_wholebrain' will be run with a specified 'jointfusion_atlas_db_base'.")
+            """ HACK: warp_atlas_to_subject is coupled with jointFusion????"""
+            retval['jointfusion_atlas_db_base'] = validatePath(parser.get('EXPERIMENT', 'JointFusion_ATLAS_DB_BASE'),
+                                                       allow_empty=False,
+                                                       isDirectory=False)
+            retval['labelmap_colorlookup_table'] = validatePath(parser.get('EXPERIMENT', 'LABELMAP_COLORLOOKUP_TABLE'),
+                                                       allow_empty=False,
+                                                       isDirectory=False)
+            retval['relabel2lobes_filename'] = validatePath(parser.get('EXPERIMENT', 'RELABEL2LOBES_FILENAME'),
+                                                       allow_empty=True,
+                                                       isDirectory=False)
         retval['workflow_phase'] = workflow_phase
     return retval
 
 
-def parsePipeline(parser):
-    """ Parse the pipeline section and return a dictionary """
+def parseNIPYPE(parser):
+    """ Parse the nipype section and return a dictionary """
     retval = dict()
     retval['ds_overwrite'] = parser.getboolean('NIPYPE', 'GLOBAL_DATA_SINK_REWRITE')
+
+    if parser.has_option('NIPYPE', 'CRASHDUMP_DIR'):
+        retval['CRASHDUMP_DIR'] = parser.get('NIPYPE', 'CRASHDUMP_DIR')
+    else:
+        retval['CRASHDUMP_DIR'] = None
+
     return retval
 
 
@@ -153,7 +184,7 @@ def parseFile(configFile, env, workphase):
             ), "BUILD_DIR option not in {0}".format(env)
     environment, cluster = parseEnvironment(parser, env)
     experiment = parseExperiment(parser, workphase)
-    pipeline = parsePipeline(parser)
+    pipeline = parseNIPYPE(parser)
     return environment, experiment, pipeline, cluster
 
 
@@ -189,10 +220,10 @@ def get_cpus(option):
         assert option in ['local', 'ds_runner'], "wfrun parse error!  Current option: {0}".format(option)
         threads = 1
         if option == 'local':
-            print "RUNNING WITHOUT POOL BUILDING"
+            print("RUNNING WITHOUT POOL BUILDING")
     else:
         threads = int(suffix.strip('_'))
-    return int(total_cpus / threads)
+    return int(old_div(total_cpus, threads))
 
 
 def _nipype_plugin_config(wfrun, cluster, template=''):
@@ -206,7 +237,7 @@ def _nipype_plugin_config(wfrun, cluster, template=''):
     elif wfrun in ['local_4', 'local_12']:
         plugin_name = 'MultiProc'
         proc_count = int(wfrun.split('local_')[1])
-        print "Running with {0} parallel processes on local machine".format(proc_count)
+        print("Running with {0} parallel processes on local machine".format(proc_count))
         plugin_args = {'n_procs': proc_count}
     elif wfrun == 'ds_runner':
         plugin_name = _create_DS_runner()
@@ -220,7 +251,7 @@ def _nipype_plugin_config(wfrun, cluster, template=''):
     return plugin_name, plugin_args
 
 
-def _nipype_execution_config(stop_on_first_crash=False, stop_on_first_rerun=False):
+def _nipype_execution_config(stop_on_first_crash=False, stop_on_first_rerun=False, crashdumpTempDirName=None):
     stop_crash = 'false'
     stop_rerun = 'false'
     if stop_on_first_crash:
@@ -228,6 +259,12 @@ def _nipype_execution_config(stop_on_first_crash=False, stop_on_first_rerun=Fals
     if stop_on_first_rerun:
         # This stops at first attempt to rerun, before running, and before deleting previous results
         stop_rerun = 'true'
+
+    if crashdumpTempDirName is None:
+        import tempfile
+        crashdumpTempDirName=tempfile.gettempdir()
+    print( "*** Note")
+    print( "    Crash file will be written to '{0}'".format(crashdumpTempDirName))
     return {
         'stop_on_first_crash': stop_crash,
         'stop_on_first_rerun': stop_rerun,
@@ -236,9 +273,10 @@ def _nipype_execution_config(stop_on_first_crash=False, stop_on_first_rerun=Fals
         # default # relative paths should be on, require hash update when changed.
         'use_relative_paths': 'false',
         'remove_node_directories': 'false',  # default
-        'remove_unnecessary_outputs': 'false',
+        'remove_unnecessary_outputs': 'true', #remove any interface outputs not needed by the workflow
         'local_hash_check': 'true',          # default
-        'job_finished_timeout': 25}
+        'job_finished_timeout': 25,
+        'crashdump_dir':crashdumpTempDirName}
 
 
 def _nipype_logging_config(cachedir):
@@ -257,16 +295,15 @@ def nipype_options(args, pipeline, cluster, experiment, environment):
     # for key, value in kwds.items():
     #     retval['execution'][key] = value
     """
-    retval = {}
-    from distributed import create_global_sge_script
+    retval = copy.deepcopy(pipeline)
+    from .distributed import create_global_sge_script
     template = create_global_sge_script(cluster, environment)
     #else:
     #    template = None
     plugin_name, plugin_args = _nipype_plugin_config(args['--wfrun'], cluster, template)
     retval['plugin_name'] = plugin_name
     retval['plugin_args'] = plugin_args
-    retval['ds_overwrite'] = pipeline['ds_overwrite']  # resolveDataSinkOption(args, pipeline)
-    retval['execution'] = _nipype_execution_config(stop_on_first_crash=False, stop_on_first_rerun=False)
+    retval['execution'] = _nipype_execution_config(stop_on_first_crash=True, stop_on_first_rerun=False, crashdumpTempDirName=pipeline['CRASHDUMP_DIR'])
     retval['logging'] = _nipype_logging_config(experiment['cachedir'])
     return retval
 
@@ -282,8 +319,8 @@ if __name__ == "__main__":
         pass
     output = parseFile(args["FILE"], args["ENV"], args["PHASE"])
     from pprint import pprint
-    print ""
-    print "**** OUTPUT ****"
+    print("")
+    print("**** OUTPUT ****")
     for d in output:
         pprint(d)
-        print ""
+        print("")

@@ -1,5 +1,5 @@
 /*
- * Author: Hans J. Johnson, Wei Lu
+ * Author: Hans J. Johnson, Wei Lu, Ali Ghayoor
  * at Psychiatry Imaging Lab,
  * University of Iowa Health Care 2010
  */
@@ -27,9 +27,8 @@
 
 #include "itkPoint.h"
 #include "itkIdentityTransform.h"
-#include <vnl/vnl_cost_function.h>
 
-#include "vnl/algo/vnl_powell.h"
+#include "itkPowellOptimizerv4.h"
 #include "landmarksConstellationCommon.h"
 #include "GenericTransformImage.h"
 #include "itkStatisticsImageFilter.h"
@@ -37,153 +36,277 @@
 #include "itkCompensatedSummation.h"
 
 // Optimize the A,B,C vector
-class Rigid3DCenterReflectorFunctor : public vnl_cost_function
+template<typename TOptimizerType>
+class Rigid3DCenterReflectorFunctor : public itk::ObjectToObjectMetricBase
 {
 public:
-  static const int UNKNOWNS_TO_ESTIMATE = 3;
+  typedef Rigid3DCenterReflectorFunctor   Self;
+  typedef itk::ObjectToObjectMetricBase   Superclass;
+  typedef itk::SmartPointer<Self>         Pointer;
+  typedef itk::SmartPointer<const Self>   ConstPointer;
+  itkNewMacro( Self );
 
+  enum { SpaceDimension=3 };
+
+  typedef Superclass::ParametersType      ParametersType;
+  typedef Superclass::DerivativeType      DerivativeType;
+  typedef Superclass::MeasureType         MeasureType;
+
+  typedef TOptimizerType                        OptimizerType;
+  typedef typename OptimizerType::Pointer       OptimizerPointer;
   typedef itk::CompensatedSummation< double >   CompensatedSummationType;
 
-  void SetCenterOfHeadMass(SImageType::PointType centerOfHeadMass)
+  Rigid3DCenterReflectorFunctor() :
+  m_params(),
+  m_OriginalImage(ITK_NULLPTR),
+  m_ResamplerReferenceImage(ITK_NULLPTR),
+  m_CenterOfHeadMass(),
+  m_CenterOfHeadMassIsSet(false),
+  m_BackgroundValue(0),
+  m_DoPowell(true),
+  m_imInterp(ITK_NULLPTR),
+  m_cc(0.0),
+  m_HasLocalSupport(false)
   {
-    m_CenterOfHeadMass = centerOfHeadMass;
+    this->m_Optimizer = OptimizerType::New();
+    this->m_Optimizer->SetMetric( &( *this ) );
+    this->m_Optimizer->SetStepLength( 0.025 );
+    this->m_Optimizer->SetStepTolerance( 1e-12 );
+    this->m_Optimizer->SetValueTolerance( 1e-12 );
+    this->m_Optimizer->SetMaximumIteration( 50 );
+
+    this->m_params.set_size(SpaceDimension);
+    this->m_params.fill(0.0);
+
+    this->m_imInterp = LinearInterpolatorType::New();
   }
 
-  void QuickSampleParameterSpace(void)
+  ////////////////////////
+  // Mandatory metric functions
+  virtual void Initialize(void) throw ( itk::ExceptionObject ) ITK_OVERRIDE
   {
-    vnl_vector<double> params;
-    params.set_size(3);
+    ParametersType params;
+    params.set_size(SpaceDimension);
 
     params[0] = 0;
     params[1] = 0;
     params[2] = 0;
     // Initialize with current guess;
-    double max_cc = this->f(params);
     this->m_params = params;
-    const double HARange = 25.0;
-    const double BARange = 15.0;
+    double max_cc = this->GetValue();
 
-    // rough search in neighborhood.
-    const double one_degree = 1.0F * vnl_math::pi / 180.0F;
-    const double HAStepSize = HARange * one_degree * .1;
-    const double BAStepSize = BARange * one_degree * .1;
-    // Let the powell optimizer do all the work for determining the proper
-    // offset
-    // Quick search just needs to get an approximate angle correct.
+    // Run a multi-level exhaustive search to find the approximate parameters.
+    // The Powell optimizer will then tune the exhaustive search parameters.
+    std::vector<double> Angle_Range(3);
+    Angle_Range[0] = 45.0;
+    Angle_Range[1] = 2.5;
+    Angle_Range[2] = 0.5;
+
+    std::vector<double> Angle_Stepsizes(3);
+    Angle_Stepsizes[0] = 5.0;
+    Angle_Stepsizes[1] = 0.5;
+    Angle_Stepsizes[2] = 0.25;
+
+    std::vector<double> Offset_Range(3);
+    Offset_Range[0] = 15.0;
+    Offset_Range[1] = 1.5;
+    Offset_Range[2] = 0.5;
+
+    std::vector<double> Offset_Stepsizes(3);
+    Offset_Stepsizes[0] = 3.0;
+    Offset_Stepsizes[1] = 0.5;
+    Offset_Stepsizes[2] = 0.25;
+
+    for( unsigned int resolutionIter = 0; resolutionIter <= 2; ++resolutionIter )
       {
-      for( double HA = -HARange * one_degree; HA <= HARange * one_degree; HA += HAStepSize )
-        {
-        for( double BA = -BARange * one_degree; BA <= BARange * one_degree; BA += BAStepSize )
-          {
-          const double Offset = 0.0;
-          params[0] = HA;
-          params[1] = BA;
-          params[2] = Offset;
-          const double current_cc = this->f(params);
-          if( current_cc < max_cc )
-            {
-            this->m_params = params;
-            max_cc = current_cc;
-            }
-          }
-        }
+      const double HA_range = Angle_Range[resolutionIter];
+      const double BA_range = Angle_Range[resolutionIter];
+      const double LR_range = Offset_Range[resolutionIter];
+
+      const double HA_stepsize = Angle_Stepsizes[resolutionIter]; // degree
+      const double BA_stepsize = Angle_Stepsizes[resolutionIter]; // degree
+      const double LR_stepsize = Offset_Stepsizes[resolutionIter]; // mm
+
+      this->DoExhaustiveSearch(this->m_params, max_cc,
+                               HA_range, BA_range, LR_range,
+                               HA_stepsize, BA_stepsize, LR_stepsize
+#ifdef WRITE_CSV_FILE
+                               ,std::string("")
+#endif
+                               );
       }
+
+    this->m_cc = max_cc;
+
     // DEBUGGING INFORMATION
-    if( LMC::globalverboseFlag == true )
+    if( LMC::globalverboseFlag )
       {
       itk::NumberToString<double> doubleToString;
-      std::cout << "quick search 15 deg "
+      std::cout << "Initialize exhaustive search: "
                 << " HA= " << doubleToString(this->m_params[0] * 180.0 / vnl_math::pi)
                 << " BA= " << doubleToString(this->m_params[1] * 180.0 / vnl_math::pi)
                 << " XO= " << doubleToString(this->m_params[2])
-                << " cc="  <<  doubleToString(this->f(this->m_params) )
-                << " iterations=" << this->GetIterations()
+                << " cc="  <<  doubleToString(this->m_cc)
                 << std::endl;
       }
   }
 
-  Rigid3DCenterReflectorFunctor() :
-    vnl_cost_function(UNKNOWNS_TO_ESTIMATE),
-    m_params(),
-    m_OriginalImage(ITK_NULLPTR),
-    m_OutputImageSpacing(),
-    m_OutputImageDirection(),
-    m_OutputImageStartIndex(),
-    m_OutputImageSize(),
-    m_OutputImageOrigin(),
-    m_CenterOfHeadMass(),
-    m_InternalResampledForReflectiveComputationImage(ITK_NULLPTR),
-    m_ResampleFilter(ITK_NULLPTR),
-    m_BackgroundValue(0),
-    m_CenterOfImagePoint(),
-    m_Translation(),
-    m_Iterations(0),
-    m_Optimizer( &( *this ) ),
-    m_imInterp(ITK_NULLPTR),
-    m_cc(0.0)
+  virtual MeasureType GetValue() const ITK_OVERRIDE
   {
-    this->m_params.set_size(UNKNOWNS_TO_ESTIMATE);
-    this->m_params.fill(0.0);
-
-    static const double default_tolerance = 1e-4;
-    static const double InitialStepSize = 7.0 * vnl_math::pi / 180.0;
-    this->m_Optimizer.set_initial_step(InitialStepSize);
-    this->m_Optimizer.set_f_tolerance(default_tolerance); // TODO:  This should
-                                                          // be optimized for
-                                                          // speed.
-    this->m_Optimizer.set_x_tolerance(default_tolerance); // TODO:  Need to do
-                                                          // extensive testing
-                                                          // of the speed
-                                                          // effects of changing
-                                                          // this value with
-                                                          // respect to quality
-                                                          // of result.
-
-    this->m_imInterp = LinearInterpolatorType::New();
+    return f(this->m_params);
   }
 
-  double f(vnl_vector<double> const & params) ITK_OVERRIDE
+  virtual void GetDerivative( DerivativeType & ) const ITK_OVERRIDE
   {
-    const double        MaxUnpenalizedAllowedDistance = 8.0;
-    const double        DistanceFromCenterOfMass = vcl_abs(params[2]);
-    static const double FortyFiveDegreesAsRadians = 45.0 * vnl_math::pi / 180.0;
-    const double        cost_of_HeadingAngle = ( vcl_abs(params[0]) < FortyFiveDegreesAsRadians ) ? 0 :
-      ( ( vcl_abs(params[0]) - FortyFiveDegreesAsRadians ) * 2 );
-    const double cost_of_BankAngle = ( vcl_abs(params[1]) < FortyFiveDegreesAsRadians ) ? 0 :
-      ( ( vcl_abs(params[1]) - FortyFiveDegreesAsRadians ) * 2 );
+  }
 
-    if( ( vcl_abs(params[0]) > FortyFiveDegreesAsRadians ) || ( vcl_abs(params[1]) > FortyFiveDegreesAsRadians ) )
+  void GetValueAndDerivative( MeasureType & value,
+                              DerivativeType & derivative ) const ITK_OVERRIDE
+  {
+    value = GetValue();
+    GetDerivative( derivative );
+  }
+
+  virtual unsigned int GetNumberOfLocalParameters() const ITK_OVERRIDE
+  {
+    return SpaceDimension;
+  }
+
+  virtual unsigned int GetNumberOfParameters(void) const ITK_OVERRIDE
+  {
+    return SpaceDimension;
+  }
+
+  virtual void SetParameters( ParametersType & parameters ) ITK_OVERRIDE
+  {
+    this->m_params = parameters;
+  }
+
+  virtual const ParametersType & GetParameters() const ITK_OVERRIDE
+  {
+    return this->m_params;
+  }
+
+  virtual bool HasLocalSupport() const ITK_OVERRIDE
+  {
+    return this->m_HasLocalSupport;
+  }
+
+  void SetHasLocalSupport(bool hls)
+  {
+    this->m_HasLocalSupport = hls;
+  }
+
+  virtual void UpdateTransformParameters( const DerivativeType &, ParametersValueType ) ITK_OVERRIDE
+  {
+  }
+  ////////////////////////
+
+  void DoExhaustiveSearch(ParametersType & opt_params,
+                          double & opt_cc,
+                          const double HARange,
+                          const double BARange,
+                          const double LRRange,
+                          const double HAStepSize,
+                          const double BAStepSize,
+                          const double LRStepSize
+#ifdef WRITE_CSV_FILE
+                          ,std::string CSVFileName
+#endif
+                          )
+  {
+  // starting parameters are optimal parameters from previous level
+  const ParametersType starting_params (opt_params);
+  // new search parameters
+  ParametersType current_params;
+  current_params.set_size(SpaceDimension);
+#ifdef WRITE_CSV_FILE
+  std::stringstream csvFileOfMetricValues;
+#endif
+  const double degree_to_rad = vnl_math::pi / 180.0;
+
+  for( double LR = -LRRange; LR <= LRRange; LR += LRStepSize)
+    {
+    for( double HA = -HARange; HA <= HARange; HA += HAStepSize )
       {
-      std::cout << "WARNING: ESTIMATED ROTATIONS ARE WAY TOO BIG SO GIVING A HIGH COST" << std::endl;
-      return 1;
-      }
-    const double cc = -CenterImageReflection_crossCorrelation(params);
-    m_Iterations++;
+      for( double BA = -BARange; BA <= BARange; BA += BAStepSize )
+        {
+        current_params[0] = starting_params[0]+HA * degree_to_rad;
+        current_params[1] = starting_params[1]+BA * degree_to_rad;
+        current_params[2] = starting_params[2]+LR;
 
-    const double cost_of_motion = ( vcl_abs(DistanceFromCenterOfMass) < MaxUnpenalizedAllowedDistance ) ? 0 :
-      ( vcl_abs(DistanceFromCenterOfMass - MaxUnpenalizedAllowedDistance) * .1 );
-    const double raw_finalcos_gamma = cc + cost_of_motion + cost_of_BankAngle + cost_of_HeadingAngle;
+        const double current_cc = this->f(current_params);
+        if( current_cc < opt_cc )
+          {
+          opt_params = current_params;
+          opt_cc = current_cc;
+          }
+
+#ifdef WRITE_CSV_FILE
+        csvFileOfMetricValues << current_params[0]/degree_to_rad
+                              << "," << current_params[1]/degree_to_rad
+                              << "," << current_params[2]
+                              << "," << current_cc
+                              << std::endl;
+#endif
+        }
+      }
+    }
+#ifdef WRITE_CSV_FILE
+  if( CSVFileName != "" )
+    {
+    std::cout << "\nWriting out metric values in a csv file..." << std::endl;
+    std::ofstream csvFile;
+    csvFile.open( CSVFileName.c_str() );
+    if( !csvFile.is_open() )
+      {
+      itkGenericExceptionMacro( << "Error: Can't write oputput csv file: " << CSVFileName << "!" << std::endl );
+      }
+    csvFile << csvFileOfMetricValues.str();
+    csvFile.close();
+    }
+#endif
+  }
+
+  double f(const ParametersType & params) const
+  {
+  const double        MaxUnpenalizedAllowedDistance = 8.0;
+  const double        DistanceFromCenterOfMass = std::abs(params[2]);
+  static const double FortyFiveDegreesAsRadians = 45.0 * vnl_math::pi / 180.0;
+  const double        cost_of_HeadingAngle = ( std::abs(params[0]) < FortyFiveDegreesAsRadians ) ? 0 :
+  ( ( std::abs(params[0]) - FortyFiveDegreesAsRadians ) * 2 );
+  const double cost_of_BankAngle = ( std::abs(params[1]) < FortyFiveDegreesAsRadians ) ? 0 :
+  ( ( std::abs(params[1]) - FortyFiveDegreesAsRadians ) * 2 );
+
+  if( ( std::abs(params[0]) > FortyFiveDegreesAsRadians ) || ( std::abs(params[1]) > FortyFiveDegreesAsRadians ) )
+    {
+    std::cout << "WARNING: ESTIMATED ROTATIONS ARE WAY TOO BIG SO GIVING A HIGH COST" << std::endl;
+    return 1;
+    }
+  const double cc = -CenterImageReflection_crossCorrelation(params);
+
+  const double cost_of_motion = ( std::abs(DistanceFromCenterOfMass) < MaxUnpenalizedAllowedDistance ) ? 0 :
+  ( std::abs(DistanceFromCenterOfMass - MaxUnpenalizedAllowedDistance) * .1 );
+  const double raw_finalcos_gamma = cc + cost_of_motion + cost_of_BankAngle + cost_of_HeadingAngle;
 
 #ifdef __USE_EXTENSIVE_DEBUGGING__
-    if( !vnl_math_isfinite(raw_finalcos_gamma) )
-      {
-      std::cout << __FILE__ << " " << __LINE__ << " "
-                << params << " : " << cc << " " << cost_of_HeadingAngle << " " << cost_of_BankAngle << " "
-                << cost_of_motion << std::endl;
-      return EXIT_FAILURE;
-      }
+  if( !vnl_math_isfinite(raw_finalcos_gamma) )
+    {
+    std::cout << __FILE__ << " " << __LINE__ << " "
+    << params << " : " << cc << " " << cost_of_HeadingAngle << " " << cost_of_BankAngle << " "
+    << cost_of_motion << std::endl;
+    return EXIT_FAILURE;
+    }
 #endif
-    return raw_finalcos_gamma;
+  return raw_finalcos_gamma;
   }
+
 
   RigidTransformType::Pointer GetTransformToMSP(void) const
   {
-    // Compute and store the new output image origin
-    m_ResampleFilter->SetTransform( this->GetTransformFromParams(this->m_params) );
-    m_ResampleFilter->Update();
-    SImageType::Pointer image = m_ResampleFilter->GetOutput();
-
-    // it is also the msp location
+    // Here we try to make MSP plane as the mid slice of the output image voxel lattice
+    SImageType::Pointer image = GetResampledImageToOutputBox(this->m_params);
+    // it should be the msp location
     SImageType::PointType physCenter = GetImageCenterPhysicalPoint(image);
 
     // Move the physical origin to the center of the image
@@ -195,15 +318,27 @@ public:
     return tempEulerAngles3DT;
   }
 
-  void Initialize(SImageType::Pointer & RefImage)
+  void InitializeImage(SImageType::Pointer & RefImage)
   {
+    if( !m_CenterOfHeadMassIsSet )
       {
-      SImageType::PixelType dummy;
-      // Find threshold below which image is considered background.
-      m_BackgroundValue = setLowHigh<SImageType>(RefImage, dummy, dummy, 0.1F);
+      itkGenericExceptionMacro(<< "ERROR: m_CenterOfHeadMass is not set!" << std::endl);
+      }
+    else
+      {
+      if( LMC::globalverboseFlag )
+        {
+        std::cout << "Center of Head Mass: [" << this->m_CenterOfHeadMass[0] << "," << this->m_CenterOfHeadMass[1] << ","
+          << this->m_CenterOfHeadMass[2] << "]" << std::endl;
+        }
       }
 
-    this->m_CenterOfImagePoint = GetImageCenterPhysicalPoint(RefImage);
+      {
+      SImageType::PixelType dummyLow;
+      SImageType::PixelType dummyHigh;
+      // Find threshold below which image is considered background.
+      m_BackgroundValue = setLowHigh<SImageType>(RefImage, dummyLow, dummyHigh, 0.1F);
+      }
 
 #ifdef USE_DEBUGGIN_IMAGES
       {
@@ -215,26 +350,15 @@ public:
       }
 #endif
 
-    this->m_OriginalImage = RefImage;
-    this->m_Translation = this->m_CenterOfHeadMass.GetVectorFromOrigin() - m_CenterOfImagePoint.GetVectorFromOrigin();
-    if( LMC::globalverboseFlag == true )
-      {
-      std::cout << "Center Of Physical Point: " << this->m_CenterOfImagePoint << std::endl;
-      std::cout << "Center Of Mass Point:" << this->m_CenterOfHeadMass << std::endl;
-      std::cout << "IntialTranslation: " << this->m_Translation << std::endl;
-      }
+    this->SetDownSampledReferenceImage(RefImage);
   }
 
   /* -- */
   void SetDownSampledReferenceImage(SImageType::Pointer & NewImage)
   {
-    m_OriginalImage = NewImage;
-  }
-
-  /* -- */
-  unsigned int GetIterations(void) const
-  {
-    return m_Iterations;
+    this->m_OriginalImage = NewImage;
+    // Update the output reference image for the resampler every time the OriginalImage is updated
+    this->CreateResamplerReferenceImage();
   }
 
   /* -- */
@@ -244,67 +368,92 @@ public:
   }
 
   /* -- */
-  RigidTransformType::Pointer GetTransformFromParams(vnl_vector<double> const & params) const
+  RigidTransformType::Pointer GetTransformFromParams(ParametersType const & params) const
   {
     RigidTransformType::Pointer tempEulerAngles3DT = RigidTransformType::New();
 
-    tempEulerAngles3DT->SetCenter(this->m_CenterOfImagePoint);
+    tempEulerAngles3DT->SetCenter(this->GetCenterOfHeadMass());
     tempEulerAngles3DT->SetRotation(0, params[1], params[0]);
-    SImageType::PointType::VectorType tnsl = this->m_Translation;
-    tnsl[0] += params[2];
+    SImageType::PointType::VectorType tnsl;
+    tnsl[0] = params[2];
+    tnsl[1] = 0;
+    tnsl[2] = 0;
     tempEulerAngles3DT->SetTranslation(tnsl);
+
     return tempEulerAngles3DT;
   }
 
-  /* -- */
-  double CenterImageReflection_crossCorrelation(vnl_vector<double> const & params)
+  void CreateResamplerReferenceImage(void)
   {
-      {
-      // Define the output image direction identical
-      m_OutputImageDirection.SetIdentity();
+    SImageType::SizeType              outputImageSize;
+    SImageType::PointType             outputImageOrigin;
 
+    SImageType::SpacingType outputImageSpacing = m_OriginalImage->GetSpacing();
+      {
       // Get output spacing
-      const SImageType::SpacingType &inputImageSpacing = m_OriginalImage->GetSpacing();
-      SImageType::SpacingType::ValueType minSpacing=inputImageSpacing[0];
+      SImageType::SpacingType::ValueType minSpacing=outputImageSpacing[0];
       for( unsigned int i = 1; i < 3; ++i )
         {
-          minSpacing = std::min(minSpacing,inputImageSpacing[i]);
+        minSpacing = std::min(minSpacing,outputImageSpacing[i]);
         }
       for( unsigned int i = 0; i < 3; ++i )
         {
-          m_OutputImageSpacing[i]=minSpacing;
+        outputImageSpacing[i]=minSpacing;
         }
 
-      // Define start index
-      m_OutputImageStartIndex.Fill(0);
-
       // Desire a 95*2 x 130*2 x 160x2 mm voxel lattice that will fit a brain
-      m_OutputImageSize[0] = static_cast<unsigned long int>( 2.0 * vcl_ceil(95.0  / m_OutputImageSpacing[0]) );
-      m_OutputImageSize[1] = static_cast<unsigned long int>( 2.0 * vcl_ceil(130.0 / m_OutputImageSpacing[1]) );
-      m_OutputImageSize[2] = static_cast<unsigned long int>( 2.0 * vcl_ceil(160.0 / m_OutputImageSpacing[2]) );
+      outputImageSize[0] = static_cast<SImageType::SpacingType::ValueType>( 2.0 * std::ceil(95.0  / outputImageSpacing[0]) );
+      outputImageSize[1] = static_cast<SImageType::SpacingType::ValueType>( 2.0 * std::ceil(130.0 / outputImageSpacing[1]) );
+      outputImageSize[2] = static_cast<SImageType::SpacingType::ValueType>( 2.0 * std::ceil(160.0 / outputImageSpacing[2]) );
 
       // The physical center of MSP plane is not determined yet. At the
       // optimizing stage we take COM as physical center
-      m_OutputImageOrigin[0] = m_CenterOfHeadMass[0] - .5 * ( m_OutputImageSize[0] - 1 ) * m_OutputImageSpacing[0];
-      m_OutputImageOrigin[1] = m_CenterOfHeadMass[1] - .5 * ( m_OutputImageSize[1] - 1 ) * m_OutputImageSpacing[1];
-      m_OutputImageOrigin[2] = m_CenterOfHeadMass[2] - .5 * ( m_OutputImageSize[2] - 1 ) * m_OutputImageSpacing[2];
+      outputImageOrigin[0] = this->GetCenterOfHeadMass()[0] - .5 * ( outputImageSize[0] - 1 ) * outputImageSpacing[0];
+      outputImageOrigin[1] = this->GetCenterOfHeadMass()[1] - .5 * ( outputImageSize[1] - 1 ) * outputImageSpacing[1];
+      outputImageOrigin[2] = this->GetCenterOfHeadMass()[2] - .5 * ( outputImageSize[2] - 1 ) * outputImageSpacing[2];
       }
+
+    // Define start index
+    SImageType::IndexType             outputImageStartIndex;
+    outputImageStartIndex.Fill(0);
+
+    // Define the output image direction identical
+    SImageType::DirectionType         outputImageDirection;
+    outputImageDirection.SetIdentity();
+
+    // Define image region
+    SImageType::RegionType outputImageRegion;
+    outputImageRegion.SetSize(outputImageSize);
+    outputImageRegion.SetIndex(outputImageStartIndex);
+
+    this->m_ResamplerReferenceImage = SImageType::New();
+    this->m_ResamplerReferenceImage->SetOrigin(outputImageOrigin);
+    this->m_ResamplerReferenceImage->SetDirection(outputImageDirection);
+    this->m_ResamplerReferenceImage->SetSpacing(outputImageSpacing);
+    this->m_ResamplerReferenceImage->SetRegions(outputImageRegion);
+    this->m_ResamplerReferenceImage->Allocate();
+  }
+
+  /* -- */
+  SImageType::Pointer GetResampledImageToOutputBox(ParametersType const & params) const
+  {
     /*
      * Resample the image
      */
-    m_ResampleFilter = ResampleFilterType::New();
-    LinearInterpolatorType::Pointer interpolator = LinearInterpolatorType::New();
-    m_ResampleFilter->SetInterpolator(interpolator);
-    m_ResampleFilter->SetDefaultPixelValue(0);
-    m_ResampleFilter->SetOutputSpacing(m_OutputImageSpacing);
-    m_ResampleFilter->SetOutputOrigin(m_OutputImageOrigin);
-    m_ResampleFilter->SetSize(m_OutputImageSize);
-    m_ResampleFilter->SetOutputDirection(m_OutputImageDirection);
-    m_ResampleFilter->SetOutputStartIndex(m_OutputImageStartIndex);
-    m_ResampleFilter->SetInput(this->m_OriginalImage);
-    m_ResampleFilter->SetTransform( this->GetTransformFromParams(params) );
-    m_ResampleFilter->Update();
-    m_InternalResampledForReflectiveComputationImage = m_ResampleFilter->GetOutput();
+    ResampleFilterType::Pointer       resampleFilter = ResampleFilterType::New();
+    resampleFilter->SetInterpolator(this->m_imInterp);
+    resampleFilter->SetDefaultPixelValue(0);
+    resampleFilter->UseReferenceImageOn();
+    resampleFilter->SetReferenceImage(this->m_ResamplerReferenceImage);
+    resampleFilter->SetInput(this->m_OriginalImage);
+    resampleFilter->SetTransform( this->GetTransformFromParams(params) );
+    resampleFilter->Update();
+    return resampleFilter->GetOutput();
+  }
+
+  double CenterImageReflection_crossCorrelation(ParametersType const & params) const
+  {
+    SImageType::Pointer  internalResampledForReflectiveComputationImage = GetResampledImageToOutputBox(params);
 
     /*
      * Compute the reflective correlation
@@ -315,13 +464,13 @@ public:
     double               sumVoxelValuesReflected = 0.0F;
     double               sumSquaredVoxelValuesReflected = 0.0F;
     int                  N = 0;
-    SImageType::SizeType rasterResampleSize = m_InternalResampledForReflectiveComputationImage->GetLargestPossibleRegion().GetSize();
+    SImageType::SizeType rasterResampleSize = internalResampledForReflectiveComputationImage->GetLargestPossibleRegion().GetSize();
     const SImageType::SizeType::SizeValueType xMaxIndexResampleSize = rasterResampleSize[0] - 1;
     rasterResampleSize[0] /= 2; // Only need to do 1/2 in the x direction;
     SImageType::RegionType rasterRegion;
     rasterRegion.SetSize(rasterResampleSize);
-    rasterRegion.SetIndex( m_InternalResampledForReflectiveComputationImage->GetLargestPossibleRegion().GetIndex() );
-    itk::ImageRegionConstIteratorWithIndex<SImageType> halfIt(m_InternalResampledForReflectiveComputationImage,
+    rasterRegion.SetIndex( internalResampledForReflectiveComputationImage->GetLargestPossibleRegion().GetIndex() );
+    itk::ImageRegionConstIteratorWithIndex<SImageType> halfIt(internalResampledForReflectiveComputationImage,
                                                               rasterRegion);
 
     CompensatedSummationType  CS_sumVoxelValuesQR;
@@ -341,7 +490,7 @@ public:
         }
       SImageType::IndexType ReflectedIndex = halfIt.GetIndex();
       ReflectedIndex[0] = xMaxIndexResampleSize - ReflectedIndex[0];
-      const double g = m_InternalResampledForReflectiveComputationImage->GetPixel(ReflectedIndex);
+      const double g = internalResampledForReflectiveComputationImage->GetPixel(ReflectedIndex);
       if( g < this->m_BackgroundValue )  // don't worry about background voxels.
         {
         continue;
@@ -370,7 +519,7 @@ public:
     const double cc =
       ( ( sumVoxelValuesQR - sumVoxelValuesReflected * sumVoxelValues
           / N )
-        / vcl_sqrt( ( sumSquaredVoxelValues - sumVoxelValues * sumVoxelValues
+        / std::sqrt( ( sumSquaredVoxelValues - sumVoxelValues * sumVoxelValues
                       / N )
                     * ( sumSquaredVoxelValuesReflected - sumVoxelValuesReflected * sumVoxelValuesReflected / N ) ) );
     return cc;
@@ -378,14 +527,6 @@ public:
 
   SImageType::Pointer GetMSPCenteredImage(void)
   {
-    // Note GetTransformToMSP() aligns physical origin to the center of MSP.
-    // SimpleResampleImage() further aligns physical center of image to physical
-    // origin.
-
-    // RigidTransformType::Pointer tempEulerAngles3DT = GetTransformToMSP();
-    // return SimpleResampleImage( this->m_OriginalImage, tempEulerAngles3DT );
-
-    // create a colormap lookup table
     typedef itk::StatisticsImageFilter<SImageType> StatisticsFilterType;
     StatisticsFilterType::Pointer statisticsFilter = StatisticsFilterType::New();
     statisticsFilter->SetInput(this->m_OriginalImage);
@@ -402,78 +543,71 @@ public:
 
   double GetCC(void) const
   {
-    return m_cc;
+    return this->m_cc;
   }
 
-/*
-  void Update(void)
-  {
-    this->m_Optimizer.minimize(this->m_params);
-    std::cout << this->m_params[0] * 180.0 / vnl_math::pi << " " << this->m_params[1] * 180.0 / vnl_math::pi << " "
-              << this->m_params[2] << " cc= " << this->f(this->m_params) << " iters= " << this->GetIterations()
-              << std::endl;
-  }
-*/
-  void Update(void)
+  void Update()
   {
     itk::NumberToString<double> doubleToString;
 
-    this->m_Optimizer.minimize(this->m_params);
-    m_cc = this->f(this->m_params);
+    if( this->m_DoPowell )
+      {
+      try
+        {
+        this->m_Optimizer->StartOptimization();
+        }
+      catch (itk::ExceptionObject &e)
+        {
+        std::cout << "Exception thrown ! " << std::endl;
+        std::cout << "An error occurred during Optimization" << std::endl;
+        std::cout << "Location    = " << e.GetLocation() << std::endl;
+        std::cout << "Description = " << e.GetDescription() << std::endl;
+        //return EXIT_FAILURE;
+        }
+      this->m_params = this->m_Optimizer->GetCurrentPosition();
+      }
+    this->m_cc = this->GetValue();
+
     std::cout << doubleToString(this->m_params[0] * 180.0 / vnl_math::pi) << " "
               << doubleToString(this->m_params[1] * 180.0 / vnl_math::pi) << " "
               << this->m_params[2] << " cc= "
-              << doubleToString(m_cc) << " iters= " << this->GetIterations()
+              << doubleToString(this->m_cc) << " iters= " << this->m_Optimizer->GetCurrentIteration()
               << std::endl;
   }
 
-private:
-  typedef vnl_powell                                       OptimizerType;
-  typedef itk::ResampleImageFilter<SImageType, SImageType> ResampleFilterType;
+  itkSetMacro(DoPowell,bool);
+  itkGetConstMacro(DoPowell,bool);
 
-  SImageType::Pointer SimpleResampleImage(SImageType::Pointer image, RigidTransformType::Pointer EulerAngles3DT)
+  void SetCenterOfHeadMass(const SImageType::PointType & centerOfHeadMass)
   {
-    m_ResampleFilter = ResampleFilterType::New();
-    LinearInterpolatorType::Pointer interpolator = LinearInterpolatorType::New();
-    m_ResampleFilter->SetInterpolator(interpolator);
-    m_ResampleFilter->SetDefaultPixelValue(0);
-    m_ResampleFilter->SetOutputSpacing(m_OutputImageSpacing);
-    m_ResampleFilter->SetSize(m_OutputImageSize);
-    m_ResampleFilter->SetOutputDirection(m_OutputImageDirection);
-    m_ResampleFilter->SetOutputStartIndex(m_OutputImageStartIndex);
-    m_ResampleFilter->SetInput(image);
-    m_ResampleFilter->SetTransform(EulerAngles3DT);
-
-    // Move the physical center of image to the physical origin
-    m_OutputImageOrigin[0] = -0.5 * ( m_OutputImageSize[0] - 1 ) * m_OutputImageSpacing[0];
-    m_OutputImageOrigin[1] = -0.5 * ( m_OutputImageSize[1] - 1 ) * m_OutputImageSpacing[1];
-    m_OutputImageOrigin[2] = -0.5 * ( m_OutputImageSize[2] - 1 ) * m_OutputImageSpacing[2];
-    m_ResampleFilter->SetOutputOrigin(m_OutputImageOrigin);
-
-    m_ResampleFilter->Update();
-
-    SImageType::Pointer returnImage = m_ResampleFilter->GetOutput();
-    returnImage->DisconnectPipeline();
-    return returnImage;
+    this->m_CenterOfHeadMass = centerOfHeadMass;
+    this->m_CenterOfHeadMassIsSet = true;
   }
 
-  vnl_vector<double>                m_params;
+private:
+
+  const SImageType::PointType & GetCenterOfHeadMass() const
+  {
+    if( !m_CenterOfHeadMassIsSet )
+      {
+      itkGenericExceptionMacro(<< "ERROR: m_CenterOfHeadMass is not set!" << std::endl);
+      }
+    return this->m_CenterOfHeadMass;
+  }
+
+  typedef itk::ResampleImageFilter<SImageType, SImageType> ResampleFilterType;
+
+  ParametersType                    m_params;
   SImageType::Pointer               m_OriginalImage;
-  SImageType::SpacingType           m_OutputImageSpacing;
-  SImageType::DirectionType         m_OutputImageDirection;
-  SImageType::IndexType             m_OutputImageStartIndex;
-  SImageType::SizeType              m_OutputImageSize;
-  SImageType::PointType             m_OutputImageOrigin;
+  SImageType::Pointer               m_ResamplerReferenceImage;
   SImageType::PointType             m_CenterOfHeadMass;
-  SImageType::Pointer               m_InternalResampledForReflectiveComputationImage;
-  ResampleFilterType::Pointer       m_ResampleFilter;
+  bool                              m_CenterOfHeadMassIsSet;
   SImageType::PixelType             m_BackgroundValue;
-  SImageType::PointType             m_CenterOfImagePoint;
-  SImageType::PointType::VectorType m_Translation;
-  int                               m_Iterations;
-  OptimizerType                     m_Optimizer;
+  OptimizerPointer                  m_Optimizer;
+  bool                              m_DoPowell;
   LinearInterpolatorType::Pointer   m_imInterp;
   double                            m_cc;
+  bool                              m_HasLocalSupport;
 };
 
 #ifndef ITK_MANUAL_INSTANTIATION

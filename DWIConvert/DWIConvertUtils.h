@@ -25,13 +25,17 @@
 #include "itkMetaDataDictionary.h"
 #include "itkMetaDataObject.h"
 #include "itkVariableLengthVector.h"
-#include "vcl_cmath.h"
+#include <vcl_compiler.h>
+#include <iostream>
+#include "cmath"
 #include <iostream>
 #include <sstream>
 #include <iterator>
 #include <iomanip>
 #include <string>
 #include "itkNumberToString.h"
+
+#include <cmath>
 
 template <typename TArg>
 int
@@ -68,9 +72,17 @@ WriteVolume( const TImage *img, const std::string & fname )
   return EXIT_SUCCESS;
 }
 
+namespace itk {
+  // helper specialization to figure out the component type of a VectorImage.
+  template <typename TPixel> struct itk::ImageIOBase::MapPixelType< itk::VariableLengthVector<TPixel> >
+  {
+    static const IOComponentType CType = itk::ImageIOBase::MapPixelType<TPixel>::CType;
+  };
+}
+
 template <typename TImage>
 int
-ReadVolume( typename TImage::Pointer & img, const std::string & fname )
+ReadVolume( typename TImage::Pointer & img, const std::string & fname, bool allowLossyConversion = false )
 {
   typename itk::ImageFileReader<TImage>::Pointer imgReader =
     itk::ImageFileReader<TImage>::New();
@@ -87,6 +99,31 @@ ReadVolume( typename TImage::Pointer & img, const std::string & fname )
     std::cerr << excp << std::endl;
     return EXIT_FAILURE;
     }
+
+  if (!allowLossyConversion)
+    {
+    itk::ImageIOBase *imageIO = imgReader->GetImageIO();
+    itk::ImageIOBase::IOComponentType ioType =
+      itk::ImageIOBase::MapPixelType< typename TImage::PixelType >::CType;
+
+    if (imageIO->GetComponentType() != ioType)
+      {
+      // TODO: factor this out. this check should be done in the caller.
+      std::cerr << "Error: ReadVolume: Unsupported source pixel type." << std:: endl
+                << "  Input volume:  " << imageIO->GetComponentTypeAsString(imageIO->GetComponentType())
+                << std::endl
+                << "  Output volume: " << imageIO->GetComponentTypeAsString(ioType)
+                << std::endl
+                << "The only supported output type is <short>. "
+                << "You may consider using allowLossyConversion option."
+                << std::endl
+                << "However, use this option with caution! "
+                << "Conversion from images of a different type may cause data loss due to rounding or truncation."
+                << std::endl;
+      return EXIT_FAILURE;
+      }
+    }
+
   img = imgReader->GetOutput();
   return EXIT_SUCCESS;
 }
@@ -174,10 +211,19 @@ int RecoverBValues(const TImage *inputVol,
     }
   for( unsigned i = 0; i < bVectors.size(); ++i )
     {
-    double bval = vcl_sqrt( (bVectors[i][0] * bVectors[i][0])
+    double norm = std::sqrt( (bVectors[i][0] * bVectors[i][0])
                             + (bVectors[i][1] * bVectors[i][1])
                             + (bVectors[i][2] * bVectors[i][2]) );
-    bval *= BValue;
+    if( std::abs( 1- norm) < 1e-4 ) // Asssume value very close to 1 are 1
+      {
+      norm = 1.0;
+      }
+    // bval_i = (G_norm)^2 * bval_max
+    double bval = norm*norm*BValue;
+    if( std::abs( bval - itk::Math::Round<double>(bval) ) < 1e-2 )
+      {
+      bval = itk::Math::Round<double>(bval);
+      }
     bValues.push_back(bval);
     }
   return EXIT_SUCCESS;
@@ -220,14 +266,20 @@ normalize(const std::vector<TScalar> &vec,double *normedVec)
     normedVec[j] = vec[j];
     norm += vec[j] * vec[j];
     }
-  norm = sqrt(norm);
-  if(norm < 0.00001)
+  norm = std::sqrt(norm);
+  if( norm < 0.00001) //Only norm if not equal to zero
     {
-    norm = 0.00001;
+    for(unsigned j = 0; j < 3; ++j)
+      {
+      normedVec[j] = 0.0;
+      }
     }
-  for(unsigned j = 0; j < 3; ++j)
+  else if( std::abs(1.0 - norm) > 1e-4 ) //Only normalize if not very close to 1
     {
-    normedVec[j] /= norm;
+    for(unsigned j = 0; j < 3; ++j)
+      {
+      normedVec[j] /= norm;
+      }
     }
 }
 
@@ -386,9 +438,9 @@ template <typename TValue>
 bool
 CloseEnough(const TValue & a, const TValue & b, double magdiv = 100000.0)
 {
-  double averageMag = (vcl_fabs(static_cast<double>(a) )
-                       + vcl_fabs(static_cast<double>(b) ) ) / 2.0;
-  double diff = vcl_fabs(static_cast<double>(a) - static_cast<double>(b) );
+  double averageMag = (std::fabs(static_cast<double>(a) )
+                       + std::fabs(static_cast<double>(b) ) ) / 2.0;
+  double diff = std::fabs(static_cast<double>(a) - static_cast<double>(b) );
 
   // case one -- both near zero
   if( averageMag < 0.000001 )
@@ -475,10 +527,12 @@ extern int FSLToNrrd(const std::string & inputVolume,
                      const std::string & fslNIFTIFile,
                      const std::string & inputBValues,
                      const std::string & inputBVectors,
-                     bool transpose);
+                     bool transpose,
+                     bool allowLossyConversion);
 
     extern int NrrdToFSL(const std::string & inputVolume,
                          const std::string & outputVolume,
                          const std::string & outputBValues,
-                         const std::string & outputBVectors);
+                         const std::string & outputBVectors,
+                         bool allowLossyConversion);
 #endif // DWIConvertUtils_h

@@ -23,8 +23,8 @@
  */
 
 #include "landmarkIO.h"
-#include "itk_hdf5.h"
-#include "itk_H5Cpp.h"
+//#include "itk_hdf5.h"
+//#include "itk_H5Cpp.h"
 #include "itkNumberToString.h"
 
 RGBImageType::Pointer ReturnOrientedRGBImage(SImageType::Pointer inputImage)
@@ -116,11 +116,11 @@ static bool IsOnCylinder(const SImageType::PointType & curr_point,
                          const double radius,
                          const double thickness)
 {
-  // const double cylinder_end=vcl_abs(height - vcl_abs(curr_point[0]-center_point[0]));
+  // const double cylinder_end=std::abs(height - std::abs(curr_point[0]-center_point[0]));
   const double APdist = curr_point[1] - center_point[1];
   const double ISdist = curr_point[2] - center_point[2];
   const double cylinder_side_squared =
-    vcl_abs( radius * radius - ( APdist * APdist + ISdist * ISdist ) );
+    std::abs( radius * radius - ( APdist * APdist + ISdist * ISdist ) );
   const SImageType::PointType::VectorType PointDist2 =
     curr_point.GetVectorFromOrigin() - center_point2.GetVectorFromOrigin();
 

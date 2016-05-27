@@ -1,3 +1,6 @@
+from __future__ import print_function
+from builtins import zip
+from builtins import range
 def MakeAtlasNode(atlasDirectory, name, atlasParts):
     """ Make an atlas node that contains the elements requested in the atlasParts section
         This will allow more fine grained data grabbers to be used, thereby allowing enhanced
@@ -54,7 +57,7 @@ def MakeAtlasNode(atlasDirectory, name, atlasParts):
     if 'W_BRAINSCutSupport' in atlasParts:
         atlas_file_names.extend([
             "hncma-atlas.nii.gz",
-            "template_t1.nii.gz",
+            "template_t1_denoised_gaussian.nii.gz",
             "probabilityMaps/l_accumben_ProbabilityMap.nii.gz",
             "probabilityMaps/r_accumben_ProbabilityMap.nii.gz",
             "probabilityMaps/l_caudate_ProbabilityMap.nii.gz",
@@ -79,7 +82,7 @@ def MakeAtlasNode(atlasDirectory, name, atlasParts):
         ])
     if 'W_BCDSupport' in atlasParts:
         atlas_file_names.extend([
-            "template_t1.nii.gz",
+            "template_t1_denoised_gaussian.nii.gz",
             "20141004_BCD/template_landmarks_50Lmks.fcsv",
         ])
     if 'W_LabelMapsSupport' in atlasParts:
@@ -104,8 +107,8 @@ def MakeAtlasNode(atlasDirectory, name, atlasParts):
             "template_cerebellum.nii.gz",
             "template_class.nii.gz",
             "template_headregion.nii.gz",
-            "template_t1.nii.gz",
-            "template_t2.nii.gz",
+            "template_t1_denoised_gaussian.nii.gz",
+            "template_t2_denoised_gaussian.nii.gz",
             "template_t1_clipped.nii.gz",
             "template_t2_clipped.nii.gz"
         ])
@@ -113,7 +116,7 @@ def MakeAtlasNode(atlasDirectory, name, atlasParts):
     # # Remove filename extensions for images, but replace . with _ for other file types
     atlas_file_keys = [os.path.basename(fn).replace('.nii.gz', '').replace('.', '_').replace('-', '_') for fn in
                        atlas_file_names]
-    atlas_outputs_filename_match = dict(zip(atlas_file_keys, atlas_file_names))
+    atlas_outputs_filename_match = dict(list(zip(atlas_file_keys, atlas_file_names)))
 
     node = pe.Node(interface=nio.DataGrabber(force_output=False, outfields=atlas_file_keys),
                    run_without_submitting=True,
@@ -124,10 +127,10 @@ def MakeAtlasNode(atlasDirectory, name, atlasParts):
     node.inputs.template = '*'
     ## Prefix every filename with atlasDirectory
     atlas_search_paths = ['{0}'.format(fn) for fn in atlas_file_names]
-    node.inputs.field_template = dict(zip(atlas_file_keys, atlas_search_paths))
+    node.inputs.field_template = dict(list(zip(atlas_file_keys, atlas_search_paths)))
     ## Give 'atlasDirectory' as the substitution argument
     atlas_template_args_match = [[[]] for i in atlas_file_keys]  # build a list of proper length with repeated entries
-    node.inputs.template_args = dict(zip(atlas_file_keys, atlas_template_args_match))
+    node.inputs.template_args = dict(list(zip(atlas_file_keys, atlas_template_args_match)))
     # print "+" * 100
     # print node.inputs
     # print "-" * 100
@@ -156,10 +159,10 @@ def CreateAtlasXMLAndCleanedDeformedAverages(t1_image, deformed_list, AtlasTempl
         'AVG_NOTVB.nii.gz': '@ATLAS_INSTALL_DIRECTORY@/GENERATED_NOTVB.nii.gz',
         'AVG_AIR.nii.gz': '@ATLAS_INSTALL_DIRECTORY@/GENERATED_AIR.nii.gz',
         'AVG_BRAINMASK.nii.gz': '@ATLAS_INSTALL_DIRECTORY@/template_brain.nii.gz',
-        'T1_RESHAPED.nii.gz': '@ATLAS_INSTALL_DIRECTORY@/template_t1.nii.gz',
-        'AVG_T2.nii.gz': '@ATLAS_INSTALL_DIRECTORY@/template_t2.nii.gz',
-        'AVG_PD.nii.gz': '@ATLAS_INSTALL_DIRECTORY@/template_t2.nii.gz',
-        'AVG_FL.nii.gz': '@ATLAS_INSTALL_DIRECTORY@/template_t2.nii.gz',
+        'T1_RESHAPED.nii.gz': '@ATLAS_INSTALL_DIRECTORY@/template_t1_denoised_gaussian.nii.gz',
+        'AVG_T2.nii.gz': '@ATLAS_INSTALL_DIRECTORY@/template_t2_denoised_gaussian.nii.gz',
+        'AVG_PD.nii.gz': '@ATLAS_INSTALL_DIRECTORY@/template_t2_denoised_gaussian.nii.gz',
+        'AVG_FL.nii.gz': '@ATLAS_INSTALL_DIRECTORY@/template_t2_denoised_gaussian.nii.gz',
         'AVG_hncma_atlas.nii.gz': 'IGNORED',
         'AVG_r_caudate_ProbabilityMap.nii.gz': 'IGNORED',
         'AVG_r_putamen_ProbabilityMap.nii.gz': 'IGNORED',
@@ -192,8 +195,9 @@ def CreateAtlasXMLAndCleanedDeformedAverages(t1_image, deformed_list, AtlasTempl
     #print("\n\n\nALL_FILES: {0}\n\n\n".format(deformed_list))
     load_images_list = dict()
     for full_pathname in deformed_list:
+        full_pathname=str(full_pathname)
         base_name = os.path.basename(full_pathname)
-        if base_name in patternDict.keys():
+        if base_name in list(patternDict.keys()):
             load_images_list[base_name] = sitk.ReadImage(full_pathname)
         else:
             print("MISSING FILE FROM patternDict: {0}".format(base_name))
@@ -252,7 +256,7 @@ def CreateAtlasXMLAndCleanedDeformedAverages(t1_image, deformed_list, AtlasTempl
     T2File = None
     PDFile = None
     for index in range(0, len(deformed_list)):
-        full_pathname = deformed_list[index]
+        full_pathname = str(deformed_list[index])
         base_name = os.path.basename(full_pathname)
         if base_name == 'AVG_BRAINMASK.nii.gz':
             ### Make Brain Mask Binary
@@ -289,9 +293,9 @@ def CreateAtlasXMLAndCleanedDeformedAverages(t1_image, deformed_list, AtlasTempl
         else:
             import sys
 
-            print "ERROR: basename {0} not in list!! \n{1}".format(base_name, ['AVG_BRAINMASK.nii.gz', 'AVG_T2.nii.gz',
+            print("ERROR: basename {0} not in list!! \n{1}".format(base_name, ['AVG_BRAINMASK.nii.gz', 'AVG_T2.nii.gz',
                                                                                'AVG_PD.nii.gz', interiorPriors,
-                                                                               exteriorPriors])
+                                                                               exteriorPriors]))
             sys.exit(-1)
 
     binmask = None
@@ -300,16 +304,16 @@ def CreateAtlasXMLAndCleanedDeformedAverages(t1_image, deformed_list, AtlasTempl
 
     for full_pathname in clean_deformed_list:
         base_name = os.path.basename(full_pathname)
-        if base_name in patternDict.keys():
+        if base_name in list(patternDict.keys()):
             xmlAtlasFileContents = xmlAtlasFileContents.replace(patternDict[base_name], base_name)
     ## If there is no T2, then use the PD image
     if T2File is not None:
-        xmlAtlasFileContents = xmlAtlasFileContents.replace('@ATLAS_INSTALL_DIRECTORY@/template_t2.nii.gz',
+        xmlAtlasFileContents = xmlAtlasFileContents.replace('@ATLAS_INSTALL_DIRECTORY@/template_t2_denoised_gaussian.nii.gz',
                                                             os.path.basename(T2File))
     elif PDFile is not None:
-        xmlAtlasFileContents = xmlAtlasFileContents.replace('@ATLAS_INSTALL_DIRECTORY@/template_t2.nii.gz',
+        xmlAtlasFileContents = xmlAtlasFileContents.replace('@ATLAS_INSTALL_DIRECTORY@/template_t2_denoised_gaussian.nii.gz',
                                                             os.path.basename(PDFile))
-    xmlAtlasFileContents = xmlAtlasFileContents.replace('@ATLAS_INSTALL_DIRECTORY@/template_t1.nii.gz', 'AVG_T1.nii.gz')
+    xmlAtlasFileContents = xmlAtlasFileContents.replace('@ATLAS_INSTALL_DIRECTORY@/template_t1_denoised_gaussian.nii.gz', 'AVG_T1.nii.gz')
     ## NOTE:  HEAD REGION CAN JUST BE T1 image.
     xmlAtlasFileContents = xmlAtlasFileContents.replace('@ATLAS_INSTALL_DIRECTORY@/template_headregion.nii.gz',
                                                         os.path.basename(t1_image))

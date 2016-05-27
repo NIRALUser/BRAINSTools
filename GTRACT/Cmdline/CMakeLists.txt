@@ -1,8 +1,10 @@
-FindVTKUtil(vtkIOLegacy
+FindVTKUtil(
+  vtkIOLegacy
   vtkIOXML
   vtkCommonDataModel
   vtkFiltersCore
-  vtkFiltersGeneral)
+  vtkFiltersGeneral
+)
 
 option(DEBUGGING_PRINT_IMAGES "Use the DEBUG_IMAGE_VIEWER for debugging" ON)
 ### A local macro for configuring all these programs consistantly for the different platforms.
@@ -43,6 +45,6 @@ foreach(prog ${ALL_PROGS_LIST})
   StandardBRAINSBuildMacro(NAME ${prog} TARGET_LIBRARIES GTRACTCommon BRAINSCommonLib ${VTK_LIBRARIES})
 endforeach()
 
-if(BUILD_TESTING AND NOT Slicer_BUILD_BRAINSTOOLS)
+if(BUILD_TESTING AND NOT BRAINSTools_DISABLE_TESTING)
    add_subdirectory(TestSuite)
 endif()

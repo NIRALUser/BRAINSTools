@@ -16,7 +16,7 @@
  *  limitations under the License.
  *
  *=========================================================================*/
-// Author: Hans J. Johnson
+// Author: Hans J. Johnson, Ali Ghayoor
 
 #include "LandmarksCompareCLP.h"
 #include "Slicer3LandmarkIO.h"
@@ -81,7 +81,7 @@ int main( int argc, char * argv[] )
          bool thisLmkOK = true;
          for( unsigned int i = 0 ; i < 3 ; ++i )
            {
-           const double error_term = vcl_abs(lmk1iter->second[i] - lmk2iter->second[i]);
+           const double error_term = std::abs(lmk1iter->second[i] - lmk2iter->second[i]);
            if ( error_term > tolerance )
              {
              std::cout << "\nFAIL: lmk" << lmk1iter->first << "[" << i << "] differ by greater than tolerance" << std::endl;

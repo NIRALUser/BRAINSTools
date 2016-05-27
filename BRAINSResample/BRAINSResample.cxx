@@ -145,7 +145,6 @@ int main(int argc, char *argv[])
     // An empty SmartPointer constructor sets up someImage.IsNull() to represent a not-supplied state:
     TBRAINSResampleReferenceImageType::Pointer ReferenceImage;
 
-    typedef itk::ImageFileReader<TBRAINSResampleReferenceImageType> ReaderType;
     ReaderType::Pointer refImageReader = ReaderType::New();
     if( referenceVolume.size() > 0 )
       {
@@ -206,7 +205,7 @@ int main(int argc, char *argv[])
           typedef itk::AffineTransform<double, 3>
             LocalAffineTransformType;
           const LocalAffineTransformType::ConstPointer affineTransform =
-            dynamic_cast<LocalAffineTransformType const *>(
+            static_cast<LocalAffineTransformType const *>(
               genericTransform.GetPointer() );
 
           LocalAffineTransformType::Pointer Local_inverseTransform = LocalAffineTransformType::New();
@@ -224,13 +223,8 @@ int main(int argc, char *argv[])
           typedef itk::VersorRigid3DTransform<double>
             RigidTransformType;
           const RigidTransformType::ConstPointer rigidTransform =
-            dynamic_cast<RigidTransformType const *>(
+            static_cast<RigidTransformType const *>(
               genericTransform.GetPointer() );
-          if( rigidTransform.IsNull() )
-            {
-            std::cout << "Error in type conversion " << __FILE__ << __LINE__ << std::endl;
-            return EXIT_FAILURE;
-            }
 
           RigidTransformType::Pointer Local_inverseTransform = RigidTransformType::New();
           rigidTransform->GetInverse( Local_inverseTransform );
@@ -257,7 +251,7 @@ int main(int argc, char *argv[])
         PrincipalOperandImage,
         ReferenceImage,
         // DisplacementField,
-        genericTransform,
+        genericTransform.GetPointer(),
         defaultValue,
         interpolationMode,
         pixelType == "binary");

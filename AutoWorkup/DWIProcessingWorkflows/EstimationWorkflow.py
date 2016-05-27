@@ -13,13 +13,13 @@ from nipype.interfaces.base import traits, isdefined, BaseInterface
 from nipype.interfaces.utility import Merge, Split, Function, Rename, IdentityInterface
 import nipype.interfaces.io as nio   # Data i/oS
 import nipype.pipeline.engine as pe  # pypeline engine
-from SEMTools import *
+from nipype.interfaces.semtools import *
 
 def CreateEstimationWorkflow(WFname):
     #### Utility function ####
     def RunDTIProcess(dti_image):
         import os
-        from SEMTools import dtiprocess
+        from nipype.interfaces.semtools import dtiprocess
         DTIProcess = dtiprocess()
         DTIProcess.inputs.dti_image = dti_image
         DTIProcess.inputs.fa_output = 'FA.nrrd'
@@ -55,19 +55,22 @@ def CreateEstimationWorkflow(WFname):
     inputsSpec = pe.Node(interface=IdentityInterface(fields=['inputDWIImage', 'DWIBrainMask']),
                          name='inputsSpec')
 
-    outputsSpec = pe.Node(interface=IdentityInterface(fields=['tensor_image','FAImage','MDImage',
-                                                              'RDImage','FrobeniusNormImage',
-                                                              'Lambda1Image','Lambda2Image','Lambda3Image']),
+    outputsSpec = pe.Node(interface=IdentityInterface(fields=['tensor_image','idwi_image', # from dtiestim
+                                                              'FAImage','MDImage','RDImage','FrobeniusNormImage', # from dtiprocess
+                                                              'Lambda1Image','Lambda2Image','Lambda3Image']), # from dtiprocess
                           name='outputsSpec')
 
     # Step1: DTI estimation
     DTIEstim = pe.Node(interface=dtiestim(), name="DTIEstim")
     DTIEstim.inputs.method = 'wls'
     DTIEstim.inputs.threshold = 0
+    DTIEstim.inputs.correctionType = 'nearest'
     DTIEstim.inputs.tensor_output = 'DTI_Output.nrrd'
+    DTIEstim.inputs.idwi = 'IDWI_Output.nrrd'
     EstimationWF.connect(inputsSpec, 'inputDWIImage', DTIEstim, 'dwi_image')
     EstimationWF.connect(inputsSpec, 'DWIBrainMask', DTIEstim, 'brain_mask')
     EstimationWF.connect(DTIEstim, 'tensor_output', outputsSpec, 'tensor_image')
+    EstimationWF.connect(DTIEstim, 'idwi', outputsSpec, 'idwi_image')
 
     # Step2: DTI process
     # HACK: In the linux, "dtiprocess" returns a segmentation fault after it finishes all its processing

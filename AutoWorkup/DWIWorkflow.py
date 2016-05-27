@@ -21,6 +21,7 @@ Options:
   --workflowCacheDir CACHEDIR               Base directory that cache outputs of workflow will be written to (default: ./)
   --resultDir RESULTDIR                     Outputs of dataSink will be written to a sub directory under the resultDir named by input scan sessionID (default: CACHEDIR)
 """
+from __future__ import print_function
 
 #############################  UTILITY FUNCTIONS  #####################################
 #\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/
@@ -233,6 +234,7 @@ def runMainWorkflow(DWI_scan, T2_scan, labelMap_image, BASE_DIR, dataSink_DIR):
 
     # Step7: Run antsRegistration in one direction
     antsReg_B0ToTransformedT2 = pe.Node(interface=ants.Registration(), name="antsReg_B0ToTransformedT2")
+    antsReg_B0ToTransformedT2.inputs.interpolation = "Linear"
     antsReg_B0ToTransformedT2.inputs.dimension = 3
     antsReg_B0ToTransformedT2.inputs.transforms = ["SyN"]
     antsReg_B0ToTransformedT2.inputs.transform_parameters = [(0.25, 3.0, 0.0)]
@@ -256,6 +258,7 @@ def runMainWorkflow(DWI_scan, T2_scan, labelMap_image, BASE_DIR, dataSink_DIR):
     antsReg_B0ToTransformedT2.inputs.winsorize_lower_quantile = 0.01
     antsReg_B0ToTransformedT2.inputs.winsorize_upper_quantile = 0.99
     antsReg_B0ToTransformedT2.inputs.float = True
+    antsReg_B0ToTransformedT2.inputs.num_threads = -1
     antsReg_B0ToTransformedT2.inputs.args = '--restrict-deformation 0x1x0'
 
     DWIWorkflow.connect(ForceDCtoIDNode, ('outputVolume', pickFromList, 1), antsReg_B0ToTransformedT2, 'fixed_image')
@@ -423,7 +426,7 @@ if __name__ == '__main__':
 
   from docopt import docopt
   argv = docopt(__doc__, version='1.0')
-  print argv
+  print(argv)
 
   DWISCAN = argv['--inputDWIScan']
   assert os.path.exists(DWISCAN), "Input DWI scan is not found: %s" % DWISCAN
@@ -452,7 +455,7 @@ if __name__ == '__main__':
       RESULTDIR = argv['--resultDir']
       assert os.path.exists(RESULTDIR), "Results directory is not found: %s" % RESULTDIR
 
-  print '=' * 100
+  print('=' * 100)
 
   #\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/
   #####################################################################################
@@ -478,7 +481,7 @@ if __name__ == '__main__':
   import nipype.interfaces.io as nio   # Data i/oS
   import nipype.pipeline.engine as pe  # pypeline engine
   from nipype.interfaces.freesurfer import ReconAll
-  from SEMTools import *
+  from nipype.interfaces.semtools import *
   #####################################################################################
 
   exit = runMainWorkflow(DWISCAN, T2SCAN, LabelMapImage, CACHEDIR, RESULTDIR)

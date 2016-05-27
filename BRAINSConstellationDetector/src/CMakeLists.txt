@@ -1,8 +1,5 @@
 ## Build landmarksConstellationCOMMONLIB library
 ##
-FindVTKUtil(vtkRenderingFreeType vtkRenderingOpenGL vtkInteractionStyle
-  vtkImagingSources)
-
 add_library(landmarksConstellationCOMMONLIB STATIC
   landmarksConstellationCommon.cxx landmarkIO.cxx
   landmarksConstellationDetector.cxx
@@ -10,8 +7,9 @@ add_library(landmarksConstellationCOMMONLIB STATIC
   LLSModel.cxx
   PrepareOutputImages.cxx
   BRAINSConstellationDetectorPrimary.cxx)
-target_link_libraries(landmarksConstellationCOMMONLIB BRAINSCommonLib ${BRAINSConstellationDetector_ITK_LIBRARIES}
-      ${VTK_LIBRARIES})
+
+target_link_libraries(landmarksConstellationCOMMONLIB BRAINSCommonLib ${BRAINSConstellationDetector_ITK_LIBRARIES} ${VTK_LIBRARIES})
+
 
 #
 # To fix compilation problem: relocation R_X86_64_32 against `a local symbol' can not be
@@ -43,8 +41,9 @@ set(ALL_PROGS_LIST
   landmarksConstellationWeights
   BinaryMaskEditorBasedOnLandmarks
   BRAINSConstellationLandmarksTransform
+  # ComputeReflectiveCorrelationMetric # --A debugging program, should be compiled when needed.
   )
 foreach(prog ${ALL_PROGS_LIST})
-  StandardBRAINSBuildMacro(NAME ${prog} TARGET_LIBRARIES landmarksConstellationCOMMONLIB)
+  StandardBRAINSBuildMacro(NAME ${prog} TARGET_LIBRARIES landmarksConstellationCOMMONLIB ${VTK_LIBRARIES} )
 
 endforeach()

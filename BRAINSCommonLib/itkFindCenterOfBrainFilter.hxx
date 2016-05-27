@@ -188,7 +188,7 @@ FindCenterOfBrainFilter<TInputImage, TMaskImage>
     }
 
   double inferiorCutOff = -1000000;
-  std::cout << "Computing Sampled Distance Computations" << std::endl;
+  std::cout << "Computing Sampled Distance Computations\n" << std::endl;
   const double samplingDistanceMM = 3.0;
   // Only look in 3mm regions
   const double samplingDistanceCM = samplingDistanceMM * 0.1;
@@ -283,7 +283,7 @@ FindCenterOfBrainFilter<TInputImage, TMaskImage>
         // Put this into cm^2
         const double crossSectionalVolume = crossSectionalArea * ( samplingDistanceCM );
         // Put this into cm^3
-        const double estimated_radius = vcl_sqrt(crossSectionalArea / vnl_math::pi);
+        const double estimated_radius = std::sqrt(crossSectionalArea / vnl_math::pi);
         // Estimate the radis of a circle filling this much space
         const double ScaleFactor = 1.1;
         // Add 10% for safety //5+(crossSectionalArea-200)/100; //Larger brains
